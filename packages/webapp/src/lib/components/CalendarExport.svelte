@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { selectedEvents } from '$lib/stores/extraction';
+	import { selectedEvents, extractionResult } from '$lib/stores/extraction';
+	import { generateCalendarEvents, downloadIcsFile } from '$lib/utils/calendar';
 
 	interface Props {
 		disabled?: boolean;
@@ -8,11 +9,40 @@
 	let { disabled = false }: Props = $props();
 
 	let reminderMinutes = $state<5 | 10 | 15>(10);
+	let exportStatus = $state<'idle' | 'success' | 'error'>('idle');
+	let statusMessage = $state('');
 
-	function handleExport() {
-		// Export will be implemented in Milestone 5
-		console.log('Export clicked', { events: $selectedEvents, reminderMinutes });
-	}
+	const handleExport = () => {
+		if (!$extractionResult) {
+			exportStatus = 'error';
+			statusMessage = 'No extraction data available';
+			return;
+		}
+
+		const result = generateCalendarEvents({
+			events: $selectedEvents,
+			extractionResult: $extractionResult,
+			reminderMinutes
+		});
+
+		if (!result.success) {
+			exportStatus = 'error';
+			statusMessage = result.error || 'Export failed';
+			return;
+		}
+
+		downloadIcsFile(result.icsContent!, result.filename!);
+
+		exportStatus = 'success';
+		statusMessage =
+			result.skippedCount > 0
+				? `Downloaded! ${result.skippedCount} event(s) skipped (no start time)`
+				: 'Calendar file downloaded!';
+
+		setTimeout(() => {
+			exportStatus = 'idle';
+		}, 5000);
+	};
 </script>
 
 <div class="rounded-xl border border-sky-200 bg-white p-6">
@@ -38,7 +68,7 @@
 				<select
 					id="reminder"
 					bind:value={reminderMinutes}
-					class="mt-1 w-full rounded-lg border border-sky-200 bg-white px-3 py-2 text-sky-900 focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20 focus:outline-none"
+					class="mt-1 w-full rounded-lg border border-sky-200 bg-white py-2 pl-3 pr-8 text-sky-900 focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20 focus:outline-none"
 				>
 					<option value={5}>5 minutes</option>
 					<option value={10}>10 minutes</option>
@@ -62,6 +92,16 @@
 			>
 				Download .ics File
 			</button>
+
+			{#if exportStatus !== 'idle'}
+				<div
+					class="rounded-lg p-3 text-sm {exportStatus === 'success'
+						? 'bg-green-50 text-green-700'
+						: 'bg-red-50 text-red-700'}"
+				>
+					{statusMessage}
+				</div>
+			{/if}
 
 			<p class="text-center text-xs text-sky-400">
 				Works with Apple Calendar, Google Calendar, Outlook, and more

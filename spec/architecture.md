@@ -85,8 +85,10 @@ heatsync/
 │   │   │   │   │   └── CalendarExport.svelte
 │   │   │   │   ├── types/
 │   │   │   │   │   └── index.ts   # Re-exports from @heatsync/shared
-│   │   │   │   └── stores/
-│   │   │   │       └── extraction.ts
+│   │   │   │   ├── stores/
+│   │   │   │   │   └── extraction.ts
+│   │   │   │   └── utils/
+│   │   │   │       └── calendar.ts    # ICS generation utilities
 │   │   │   ├── app.css
 │   │   │   └── app.html
 │   │   ├── static/

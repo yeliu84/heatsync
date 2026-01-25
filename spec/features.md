@@ -11,8 +11,8 @@ Core features required for initial launch.
 | Swimmer Search | Server-side at extraction time (not client-side post-extraction) | Complete |
 | Event Display | Show event name, heat, lane, seed time; swimmer shown as "Name (Team, Age)" | Complete |
 | Event Selection | Checkboxes with Select All/None toggle, auto-select on extraction | Complete |
-| Reminder Choice | Radio buttons: 5, 10 (default), 15 min before | Pending |
-| .ics Export | Download .ics file with selected events | Pending |
+| Reminder Choice | Radio buttons: 5, 10 (default), 15 min before | Complete |
+| .ics Export | Download .ics file with selected events | Complete |
 | Loading States | Progress indicators during extraction, status in button | Complete |
 | Form State Management | Disable form after processing, "Start Over" to reset | Complete |
 | Swimmer Disambiguation | Combobox to select swimmer when same name has different team/age | Complete |

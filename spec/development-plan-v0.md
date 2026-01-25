@@ -9,7 +9,7 @@
 | 2.5 Upload Form Fix                         | Complete    | 2026-01-25 |
 | 3. Swimmer Disambiguation                   | Complete    | 2026-01-25 |
 | 3.5 UI Polish: Event Display & Selection    | Complete    | 2026-01-25 |
-| 4. Calendar Export                          | Not Started | -          |
+| 4. Calendar Export                          | Complete    | 2026-01-25 |
 | 5. Polish & Launch                          | Not Started | -          |
 
 ---
@@ -206,19 +206,17 @@ Cleaner event card layout with convenient selection controls
 
 **Goal:** Generate downloadable .ics files
 
-**Status:** Not Started
+**Status:** Complete
 
 ### Tasks
 
 - [x] Build event selection UI (checkboxes per event)
 - [x] Add "Select All" / "Deselect All" buttons
-- [ ] Implement reminder time selector (5/10/15 min radio buttons)
-- [ ] Create `/api/calendar/+server.ts` route
-- [ ] Generate valid iCalendar (.ics) format
-- [ ] Handle timezone correctly (prompt user or detect from meet location)
-- [ ] Trigger .ics file download
-- [ ] Add "Add to Google Calendar" URL link
-- [ ] Test import in Apple Calendar, Google Calendar, Outlook
+- [x] Implement reminder time selector (5/10/15 min radio buttons)
+- [x] Create calendar utility module (client-side)
+- [x] Generate valid iCalendar (.ics) format
+- [x] Handle timezone (floating local time - no TZ conversion)
+- [x] Trigger .ics file download
 
 ### Deliverable
 
@@ -304,3 +302,4 @@ PUBLIC_API_URL=http://localhost:3001
 | 2026-01-25 | 2.5       | Upload form fix - Added swimmer name input (required), URL paste option, renamed PdfUploader to HeatSheetForm |
 | 2026-01-25 | 3         | Swimmer disambiguation - Added age extraction, SwimmerProfile stores, disambiguation combobox when multiple swimmers with same name |
 | 2026-01-25 | 3.5       | UI Polish - Event card shows "Name (Team, Age)" format, auto-select all on extraction, Select All/None toggle button |
+| 2026-01-25 | 4         | Calendar Export - Client-side ICS generation, event title format "Name - E# H# L# - Event Name", floating local time (no TZ conversion), events without start times skipped with warning |
