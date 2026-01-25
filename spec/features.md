@@ -23,7 +23,7 @@ Enhancements based on user feedback.
 
 | Feature | Description | Status |
 |---------|-------------|--------|
-| URL paste input | Allow users to paste a URL to a heat sheet PDF instead of uploading | Complete (backend) |
+| URL paste input | Allow users to paste a URL to a heat sheet PDF instead of uploading | Complete |
 | Multi-swimmer search | Search for multiple swimmers at once (siblings) | Planned |
 | Google Calendar direct add | "Add to Google Calendar" button with pre-filled link | Planned |
 | Event time estimation | If times missing, estimate based on event order + avg duration | Planned |

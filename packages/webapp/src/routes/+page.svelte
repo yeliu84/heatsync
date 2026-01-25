@@ -1,9 +1,9 @@
 <script lang="ts">
-	import PdfUploader from '$lib/components/PdfUploader.svelte';
+	import HeatSheetForm from '$lib/components/HeatSheetForm.svelte';
 	import SwimmerSearch from '$lib/components/SwimmerSearch.svelte';
 	import EventList from '$lib/components/EventList.svelte';
 	import CalendarExport from '$lib/components/CalendarExport.svelte';
-	import { appState, uploadedPdf, selectedEventIds } from '$lib/stores/extraction';
+	import { appState, extractionResult, selectedEventIds } from '$lib/stores/extraction';
 </script>
 
 <!-- Hero Header -->
@@ -15,16 +15,16 @@
 
 <!-- Main content -->
 <div class="mt-16 space-y-12">
-	<!-- Step 1: Upload -->
+	<!-- Step 1: Heat Sheet Form -->
 	<section>
-		<PdfUploader />
+		<HeatSheetForm />
 	</section>
 
-	<!-- Steps 2-4: Only show after upload -->
-	{#if $uploadedPdf}
+	<!-- Steps 2-4: Only show after extraction starts -->
+	{#if $appState !== 'upload' || $extractionResult}
 		<!-- Step 2: Search -->
 		<section>
-			<SwimmerSearch disabled={$appState === 'upload' || $appState === 'extracting'} />
+			<SwimmerSearch disabled={$appState === 'extracting'} />
 		</section>
 
 		<!-- Step 3: Event List -->

@@ -78,7 +78,7 @@ heatsync/
 │   │   │   │   └── +layout.svelte # App shell, global styles
 │   │   │   ├── lib/
 │   │   │   │   ├── components/
-│   │   │   │   │   ├── PdfUploader.svelte
+│   │   │   │   │   ├── HeatSheetForm.svelte
 │   │   │   │   │   ├── SwimmerSearch.svelte
 │   │   │   │   │   ├── EventList.svelte
 │   │   │   │   │   ├── EventCard.svelte

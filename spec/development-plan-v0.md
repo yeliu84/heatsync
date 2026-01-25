@@ -2,13 +2,14 @@
 
 ## Progress Tracking
 
-| Milestone | Status | Completed |
-|-----------|--------|-----------|
-| 1. Project Setup & Core UI | Complete | 2026-01-24 |
-| 2. PDF Processing + AI Extraction (Backend) | Complete | 2026-01-24 |
-| 3. Search & Display | Not Started | - |
-| 4. Calendar Export | Not Started | - |
-| 5. Polish & Launch | Not Started | - |
+| Milestone                                   | Status      | Completed  |
+| ------------------------------------------- | ----------- | ---------- |
+| 1. Project Setup & Core UI                  | Complete    | 2026-01-24 |
+| 2. PDF Processing + AI Extraction (Backend) | Complete    | 2026-01-24 |
+| 2.5 Upload Form Fix                         | Complete    | 2026-01-25 |
+| 3. Search & Display                         | Not Started | -          |
+| 4. Calendar Export                          | Not Started | -          |
+| 5. Polish & Launch                          | Not Started | -          |
 
 ---
 
@@ -62,16 +63,20 @@ Uploadable PDF that shows "extraction coming soon" placeholder
 ### Architecture Changes
 
 #### 1. Server-Side PDF Processing
+
 Moved from client-side pdf.js processing to server-side processing. This improves performance on low-end mobile devices (target users: swim parents on phones at the pool).
 
 #### 2. Swimmer-First Extraction
+
 Requires swimmer name at extraction time for targeted extraction. Instead of extracting all events and filtering client-side, the AI extracts only the specified swimmer's events.
 
 #### 3. Model-Aware PDF Handling
+
 - **GPT models:** Upload PDF directly to OpenAI Files API (native PDF support)
 - **Non-GPT models:** Render PDF pages to images using mupdf
 
 **Architecture:**
+
 ```
 Browser → upload PDF + swimmer name → Backend → AI → swimmer's events only
 ```
@@ -91,11 +96,11 @@ Browser → upload PDF + swimmer name → Backend → AI → swimmer's events on
 
 ### Backend Endpoints
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/health` | GET | Health check |
-| `/extract` | POST | Upload PDF file, returns extracted events |
-| `/extractUrl` | POST | Provide PDF URL, returns extracted events |
+| Endpoint      | Method | Description                               |
+| ------------- | ------ | ----------------------------------------- |
+| `/health`     | GET    | Health check                              |
+| `/extract`    | POST   | Upload PDF file, returns extracted events |
+| `/extractUrl` | POST   | Provide PDF URL, returns extracted events |
 
 ### Commands
 
@@ -127,6 +132,30 @@ Upload PDF → backend processes → AI extracts events → webapp displays resu
 
 ---
 
+## Milestone 2.5: Upload Form Fix
+
+**Goal:** Fix broken upload flow - add required swimmer name input and URL option
+
+**Status:** Complete
+
+### Tasks
+
+- [x] Add `swimmerName` store to extraction.ts
+- [x] Create `HeatSheetForm.svelte` with:
+  - Swimmer name input (required)
+  - URL input with clipboard paste button
+  - File upload drop zone
+  - Form validation (name + URL or file required)
+- [x] Integrate both `/extract` and `/extractUrl` API calls
+- [x] Update +page.svelte to use new component
+- [x] Remove old PdfUploader.svelte
+
+### Deliverable
+
+Complete upload form with swimmer name, URL paste, and file upload options
+
+---
+
 ## Milestone 3: Search & Display
 
 **Goal:** User can find their swimmer's events
@@ -135,11 +164,11 @@ Upload PDF → backend processes → AI extracts events → webapp displays resu
 
 ### Tasks
 
-- [ ] Implement swimmer name search input
+- [ ] Implement swimmer name search input in case there are same names but different team and/or age
 - [ ] Add fuzzy matching for name search (handle typos, partial names)
 - [ ] Display filtered events in EventCard components
-- [ ] Show event details: number, name, heat, lane, seed time
-- [ ] Sort events by event number or estimated time
+- [ ] Show event details: event number, name, heat, lane, heat start time, seed time
+- [ ] Sort events by event number
 - [ ] Add "no results found" state with suggestions
 - [ ] Add "searching..." loading state
 - [ ] Highlight search matches in results
@@ -224,6 +253,7 @@ bun run webapp:check
 ## Environment Variables
 
 ### Backend (`packages/backend/.env`)
+
 ```bash
 PORT=3001
 OPENAI_API_KEY=your_api_key_here
@@ -232,6 +262,7 @@ OPENAI_MODEL=gpt-4o
 ```
 
 ### Webapp (`packages/webapp/.env`)
+
 ```bash
 PUBLIC_API_URL=http://localhost:3001
 ```
@@ -240,10 +271,11 @@ PUBLIC_API_URL=http://localhost:3001
 
 ## Changelog
 
-| Date | Milestone | Notes |
-|------|-----------|-------|
-| 2026-01-24 | 1 | Milestone 1 complete - monorepo structure, SvelteKit + TailwindCSS v4 + Svelte 5, all core UI components |
-| 2026-01-24 | 2 | Milestone 2 complete - Backend with Hono + mupdf + OpenAI SDK, shared types package, webapp integration |
-| 2026-01-24 | - | Development plan created |
-| 2026-01-25 | 2 | Architecture update: Swimmer-first extraction - API now requires swimmer name, GPT models use direct PDF upload via Files API, non-GPT models use PDF→image rendering |
-| 2026-01-25 | 2 | Prompt accuracy improvements: Name normalization (handles "First Last" and "Last, First" input), disambiguation for swimmers with same last name, thoroughness instructions, session date calculation, heat start time extraction, temperature=0 for deterministic results |
+| Date       | Milestone | Notes                                                                                                                                                                                                                                                                      |
+| ---------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-01-24 | 1         | Milestone 1 complete - monorepo structure, SvelteKit + TailwindCSS v4 + Svelte 5, all core UI components                                                                                                                                                                   |
+| 2026-01-24 | 2         | Milestone 2 complete - Backend with Hono + mupdf + OpenAI SDK, shared types package, webapp integration                                                                                                                                                                    |
+| 2026-01-24 | -         | Development plan created                                                                                                                                                                                                                                                   |
+| 2026-01-25 | 2         | Architecture update: Swimmer-first extraction - API now requires swimmer name, GPT models use direct PDF upload via Files API, non-GPT models use PDF→image rendering                                                                                                      |
+| 2026-01-25 | 2         | Prompt accuracy improvements: Name normalization (handles "First Last" and "Last, First" input), disambiguation for swimmers with same last name, thoroughness instructions, session date calculation, heat start time extraction, temperature=0 for deterministic results |
+| 2026-01-25 | 2.5       | Upload form fix - Added swimmer name input (required), URL paste option, renamed PdfUploader to HeatSheetForm |

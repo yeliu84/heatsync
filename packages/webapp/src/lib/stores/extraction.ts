@@ -12,6 +12,11 @@ export const appState = writable<AppState>('upload');
 export const uploadedPdf = writable<UploadedPdf | null>(null);
 
 /**
+ * Swimmer name to search for in the heat sheet
+ */
+export const swimmerName = writable<string>('');
+
+/**
  * Extraction result from AI processing
  */
 export const extractionResult = writable<ExtractionResult | null>(null);
@@ -64,6 +69,7 @@ export const selectedEvents = derived(
 export function resetStores(): void {
 	appState.set('upload');
 	uploadedPdf.set(null);
+	swimmerName.set('');
 	extractionResult.set(null);
 	selectedEventIds.set(new Set());
 	searchQuery.set('');
