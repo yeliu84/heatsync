@@ -1,5 +1,15 @@
 {
   "name": "heatsync",
   "private": true,
-  "workspaces": ["packages/*"]
+  "workspaces": ["packages/*"],
+  "scripts": {
+    "backend:dev": "bun run --cwd packages/backend dev",
+    "backend:start": "bun run --cwd packages/backend start",
+    "webapp:dev": "bun run --cwd packages/webapp dev",
+    "webapp:build": "bun run --cwd packages/webapp build",
+    "webapp:preview": "bun run --cwd packages/webapp preview",
+    "webapp:check": "bun run --cwd packages/webapp check",
+    "webapp:lint": "bun run --cwd packages/webapp lint",
+    "dev": "bun run backend:dev & bun run webapp:dev"
+  }
 }

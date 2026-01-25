@@ -1,0 +1,14 @@
+{
+  "name": "@heatsync/shared",
+  "version": "0.0.1",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/types.ts",
+      "import": "./src/types.ts"
+    }
+  },
+  "devDependencies": {
+    "typescript": "^5.x"
+  }
+}

@@ -1,5 +1,5 @@
 {
-	"name": "webapp",
+	"name": "@heatsync/webapp",
 	"private": true,
 	"version": "0.0.1",
 	"type": "module",
@@ -44,7 +44,6 @@
 		"vitest-browser-svelte": "^2.0.1"
 	},
 	"dependencies": {
-		"ics": "^3.8.1",
-		"pdfjs-dist": "^5.4.530"
+		"ics": "^3.8.1"
 	}
 }

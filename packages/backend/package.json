@@ -1,0 +1,19 @@
+{
+  "name": "@heatsync/backend",
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "dev": "bun run --watch src/index.ts",
+    "start": "bun run src/index.ts"
+  },
+  "dependencies": {
+    "hono": "^4.x",
+    "mupdf": "^1.x",
+    "openai": "^4.x",
+    "@heatsync/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.x"
+  }
+}

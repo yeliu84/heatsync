@@ -8,13 +8,14 @@ HeatSync is a web application that converts swim meet heat sheets (PDFs) into ca
 
 | Layer | Technology | Version |
 |-------|------------|---------|
-| Framework | SvelteKit | 2.x |
+| Framework (Frontend) | SvelteKit | 2.x |
+| Framework (Backend) | Hono | 4.x |
 | Runtime | Bun | 1.x |
 | Language | TypeScript | 5.x |
 | Styling | TailwindCSS | 4.x |
-| PDF Processing | pdf.js | Latest |
+| PDF Processing | mupdf | 1.x |
 | Calendar | ics | Latest |
-| AI Integration | Any OpenAI-compatible API | - |
+| AI Integration | OpenAI SDK | 4.x |
 | Dev Environment | Nix + Flakes | - |
 
 ## Development Environment
@@ -40,76 +41,84 @@ The flake provides:
 ┌─────────────────────────────────────────────────────────────┐
 │                        Frontend                              │
 │  SvelteKit + TypeScript + TailwindCSS                       │
-│  - PDF upload & preview                                      │
+│  - PDF upload interface                                      │
 │  - Swimmer search & event display                           │
 │  - Calendar event builder                                    │
 └─────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                    SvelteKit API Routes                      │
-│  /api/extract - Proxy to AI backend (hides token)           │
-│  /api/calendar - Generate .ics files                        │
+│                    Hono Backend Server                       │
+│  POST /extract - Upload PDF, process, extract with AI       │
+│  POST /extractUrl - Download PDF from URL, process, extract │
+│  GET /health - Health check endpoint                        │
 └─────────────────────────────────────────────────────────────┘
                               │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│            OpenAI-Compatible API (Configurable)              │
-│  POST {OPENAI_BASE_URL}/chat/completions                    │
-│  - Multimodal input (PDF pages as images)                   │
-│  - Structured extraction via prompt engineering             │
-│                                                             │
-│  Supported providers:                                       │
-│  - OpenAI (api.openai.com)                                  │
-│  - AI Builder Space (space.ai-builders.com/backend)         │
-│  - Ollama (localhost:11434)                                 │
-│  - Any OpenAI-compatible endpoint                           │
-└─────────────────────────────────────────────────────────────┘
+              ┌───────────────┼───────────────┐
+              ▼                               ▼
+┌─────────────────────────┐     ┌─────────────────────────────┐
+│     mupdf Library        │     │   OpenAI-Compatible API      │
+│  PDF → PNG conversion    │     │   Vision + Chat completions  │
+│  Server-side rendering   │     │   Structured extraction      │
+└─────────────────────────┘     └─────────────────────────────┘
 ```
 
 ## Directory Structure
 
-This project uses a monorepo structure to allow for future expansion (e.g., `packages/backend` or `packages/api`).
+This project uses a monorepo structure with shared types between frontend and backend.
 
 ```
 heatsync/
 ├── packages/
-│   └── webapp/                        # SvelteKit frontend
+│   ├── webapp/                    # SvelteKit frontend
+│   │   ├── src/
+│   │   │   ├── routes/
+│   │   │   │   ├── +page.svelte   # Main app (upload → search → export)
+│   │   │   │   └── +layout.svelte # App shell, global styles
+│   │   │   ├── lib/
+│   │   │   │   ├── components/
+│   │   │   │   │   ├── PdfUploader.svelte
+│   │   │   │   │   ├── SwimmerSearch.svelte
+│   │   │   │   │   ├── EventList.svelte
+│   │   │   │   │   ├── EventCard.svelte
+│   │   │   │   │   └── CalendarExport.svelte
+│   │   │   │   ├── types/
+│   │   │   │   │   └── index.ts   # Re-exports from @heatsync/shared
+│   │   │   │   └── stores/
+│   │   │   │       └── extraction.ts
+│   │   │   ├── app.css
+│   │   │   └── app.html
+│   │   ├── static/
+│   │   ├── .env.example
+│   │   ├── svelte.config.js
+│   │   ├── vite.config.ts
+│   │   ├── tsconfig.json
+│   │   └── package.json
+│   ├── backend/                   # Bun API server
+│   │   ├── src/
+│   │   │   ├── index.ts           # Entry point, Hono app
+│   │   │   ├── routes/
+│   │   │   │   ├── extract.ts     # POST /extract - PDF upload + AI
+│   │   │   │   ├── extractUrl.ts  # POST /extractUrl - URL + AI
+│   │   │   │   └── health.ts      # GET /health
+│   │   │   ├── services/
+│   │   │   │   ├── pdf.ts         # mupdf PDF→image conversion
+│   │   │   │   └── openai.ts      # OpenAI API client
+│   │   │   └── types/
+│   │   │       └── index.ts       # Backend-specific types
+│   │   ├── package.json
+│   │   ├── tsconfig.json
+│   │   └── .env.example
+│   └── shared/                    # Shared types package
 │       ├── src/
-│       │   ├── routes/
-│       │   │   ├── +page.svelte       # Main app (upload → search → export)
-│       │   │   ├── +layout.svelte     # App shell, global styles
-│       │   │   └── api/
-│       │   │       ├── extract/+server.ts    # PDF extraction proxy
-│       │   │       └── calendar/+server.ts   # .ics generation
-│       │   ├── lib/
-│       │   │   ├── components/
-│       │   │   │   ├── PdfUploader.svelte
-│       │   │   │   ├── SwimmerSearch.svelte
-│       │   │   │   ├── EventList.svelte
-│       │   │   │   ├── EventCard.svelte
-│       │   │   │   └── CalendarExport.svelte
-│       │   │   ├── services/
-│       │   │   │   ├── pdf.ts         # PDF to images conversion
-│       │   │   │   ├── extraction.ts  # AI API integration
-│       │   │   │   └── calendar.ts    # iCal generation
-│       │   │   ├── types/
-│       │   │   │   └── index.ts       # SwimEvent, Swimmer, etc.
-│       │   │   └── stores/
-│       │   │       └── extraction.ts  # Svelte stores for app state
-│       │   ├── app.css
-│       │   └── app.html
-│       ├── static/
-│       ├── .env.example
-│       ├── svelte.config.js
-│       ├── vite.config.ts
-│       ├── tsconfig.json
-│       └── package.json
-├── spec/                              # Project documentation
+│       │   └── types.ts           # SwimEvent, ExtractionResult, etc.
+│       ├── package.json
+│       └── tsconfig.json
+├── spec/                          # Project documentation
 │   ├── architecture.md
 │   ├── features.md
 │   └── development-plan-v0.md
-├── package.json                       # Root workspace config
+├── package.json                   # Root workspace config
 └── .gitignore
 ```
 
@@ -136,11 +145,54 @@ interface ExtractionResult {
 }
 
 interface CalendarEvent {
-  title: string;              // e.g., "🏊 Event 12: 100 Free - Heat 3, Lane 4"
+  title: string;              // e.g., "Event 12: 100 Free - Heat 3, Lane 4"
   startTime: Date;
   reminderMinutes: 5 | 10 | 15;
   description: string;        // Full details
   location?: string;
+}
+```
+
+## Backend API
+
+### POST /extract
+
+Upload a PDF file for extraction.
+
+**Request:** `multipart/form-data` with `pdf` file field
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": { /* ExtractionResult */ },
+  "pageCount": 12
+}
+```
+
+### POST /extractUrl
+
+Extract from a PDF URL.
+
+**Request:**
+```json
+{
+  "url": "https://example.com/heatsheet.pdf"
+}
+```
+
+**Response:** Same as `/extract`
+
+### GET /health
+
+Health check endpoint.
+
+**Response:**
+```json
+{
+  "status": "ok",
+  "timestamp": "2026-01-24T12:00:00.000Z",
+  "service": "heatsync-backend"
 }
 ```
 
@@ -149,8 +201,9 @@ interface CalendarEvent {
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
 | Runtime | Bun | Faster than Node.js, native TypeScript support, built-in bundler |
-| PDF Processing | pdf.js + canvas | Client-side conversion to images, no server storage needed |
-| AI Backend | Configurable OpenAI-compatible | Flexibility to use any provider (OpenAI, local Ollama, etc.) |
+| PDF Processing | mupdf (server-side) | High-quality rendering, offloads work from mobile browsers |
+| API Framework | Hono | Lightweight (~14KB), Web APIs, works great with Bun |
+| AI Backend | OpenAI SDK | Works with any OpenAI-compatible endpoint |
 | Calendar Format | .ics primary | Universal compatibility; Google Calendar link as convenience |
 | State Management | Svelte stores | Simple, built-in, sufficient for stateless app |
 | Styling | TailwindCSS v4 | Rapid prototyping, responsive design, CSS-first config |
@@ -159,15 +212,15 @@ interface CalendarEvent {
 
 ### Configuration
 
-The app connects to any OpenAI-compatible chat completions endpoint via environment variables:
+The backend connects to any OpenAI-compatible chat completions endpoint via environment variables:
 
 ```bash
-# Required
+# Required (in packages/backend/.env)
 OPENAI_API_KEY=your_api_key_here
 
 # Optional (defaults to OpenAI)
 OPENAI_BASE_URL=https://api.openai.com/v1
-OPENAI_MODEL=gpt-5
+OPENAI_MODEL=gpt-4o
 ```
 
 ### Example Configurations
@@ -176,7 +229,7 @@ OPENAI_MODEL=gpt-5
 ```bash
 OPENAI_API_KEY=sk-...
 OPENAI_BASE_URL=https://api.openai.com/v1
-OPENAI_MODEL=gpt-5
+OPENAI_MODEL=gpt-4o
 ```
 
 **AI Builder Space:**
@@ -195,11 +248,11 @@ OPENAI_MODEL=llava
 
 ### Extraction Strategy
 
-1. Client converts PDF to images using pdf.js
-2. Client sends base64 images to `/api/extract` server route
-3. Server proxies to configured AI endpoint with token
+1. Client uploads PDF to backend `/extract` endpoint
+2. Backend renders PDF pages to images using mupdf
+3. Backend sends images to configured AI endpoint
 4. AI extracts structured data from heat sheet images
-5. Server returns parsed `ExtractionResult` to client
+5. Backend returns parsed `ExtractionResult` to client
 
 ### Model Requirements
 
@@ -208,21 +261,21 @@ The configured model must support:
 - Structured JSON output
 
 Recommended models:
-- `gpt-5` (OpenAI)
+- `gpt-4o` (OpenAI)
 - `gemini-2.5-pro` (via AI Builder Space or Google)
 - `claude-sonnet-4-20250514` (via Anthropic-compatible proxy)
 - `llava` (Ollama, for local development)
 
 ## Security Considerations
 
-- API key stored as `OPENAI_API_KEY` environment variable
-- Key never exposed to client
+- API key stored as `OPENAI_API_KEY` environment variable in backend only
+- Key never exposed to client (all AI calls go through backend)
 - No user data persistence (stateless design)
-- PDF processing happens client-side (no server storage of uploaded files)
+- PDF processing happens server-side (backend handles all sensitive operations)
 
 ## Rate Limiting
 
 If using a shared API key in production:
-- Implement request rate limiting on `/api/extract`
+- Implement request rate limiting on `/extract` endpoint
 - Consider per-session limits (e.g., 10 extractions per hour)
 - Cache extraction results by PDF hash to reduce duplicate requests

@@ -5,11 +5,10 @@
 | Milestone | Status | Completed |
 |-----------|--------|-----------|
 | 1. Project Setup & Core UI | Complete | 2026-01-24 |
-| 2. PDF Processing | Not Started | - |
-| 3. AI Extraction Integration | Not Started | - |
-| 4. Search & Display | Not Started | - |
-| 5. Calendar Export | Not Started | - |
-| 6. Polish & Launch | Not Started | - |
+| 2. PDF Processing + AI Extraction (Backend) | Complete | 2026-01-24 |
+| 3. Search & Display | Not Started | - |
+| 4. Calendar Export | Not Started | - |
+| 5. Polish & Launch | Not Started | - |
 
 ---
 
@@ -54,90 +53,77 @@ Uploadable PDF that shows "extraction coming soon" placeholder
 
 ---
 
-## Milestone 2: PDF Processing
+## Milestone 2: PDF Processing + AI Extraction (Backend)
 
-**Goal:** Convert uploaded PDFs to images client-side
+**Goal:** Server-side PDF processing and AI extraction via Bun + Hono backend
 
-**Status:** Not Started
+**Status:** Complete
 
-### Tasks
+### Architecture Change
 
-- [ ] Integrate pdf.js library
-- [ ] Configure pdf.js worker for Vite/SvelteKit
-- [ ] Render PDF pages to canvas elements
-- [ ] Convert canvas to base64 PNG images
-- [ ] Show page thumbnails/preview grid
-- [ ] Handle multi-page PDFs (typical heat sheets are 10-50 pages)
-- [ ] Add progress indicator for large PDFs
-- [ ] Implement page range selection (optional optimization)
+Moved from client-side pdf.js processing to server-side mupdf processing. This improves performance on low-end mobile devices (target users: swim parents on phones at the pool).
 
-### Deliverable
-
-Upload PDF → see all pages as image previews
-
----
-
-## Milestone 3: AI Extraction Integration
-
-**Goal:** Send images to AI API and parse structured response
-
-**Status:** Not Started
-
-### Tasks
-
-- [ ] Create `/api/extract/+server.ts` route
-- [ ] Implement AI Builder API client
-- [ ] Design and test extraction prompt
-- [ ] Handle multimodal request with multiple images
-- [ ] Implement retry logic with exponential backoff
-- [ ] Parse AI response into `ExtractionResult` type
-- [ ] Handle partial extraction (some pages fail)
-- [ ] Add request rate limiting
-- [ ] Store extraction result in Svelte store
-
-### Extraction Prompt
-
+**Before:**
 ```
-You are extracting swim meet data from heat sheet images. Extract ALL swimmers and events visible.
+Browser → pdf.js → images → AI API
+```
 
-Return a JSON object with this exact structure:
-{
-  "meetName": "string",
-  "meetDate": "YYYY-MM-DD",
-  "venue": "string or null",
-  "events": [
-    {
-      "eventNumber": number,
-      "eventName": "full event name",
-      "heatNumber": number,
-      "lane": number,
-      "swimmerName": "First Last",
-      "team": "team code or null",
-      "seedTime": "MM:SS.ss or NT",
-      "estimatedStartTime": "HH:MM or null"
-    }
-  ]
-}
+**After:**
+```
+Browser → upload PDF → Backend (mupdf) → images → OpenAI API → results
+```
 
-Important:
-- Extract EVERY swimmer from EVERY heat shown
-- Normalize swimmer names to "First Last" format (capitalize properly)
-- If seed time shows "NT", "NS", or is blank, use "NT"
-- Event numbers are usually in the left margin or header
-- Heat numbers appear above each heat block (e.g., "Heat 1 of 3")
-- Lanes are typically numbered 1-8 or 1-10
-- Estimated start times may appear at the top of each event
+### Tasks
 
-Return ONLY valid JSON, no markdown formatting or explanation.
+- [x] Create `packages/shared` package with shared types
+- [x] Create `packages/backend` package structure
+- [x] Implement mupdf PDF→image service
+- [x] Implement OpenAI extraction service with vision
+- [x] Create `/health` endpoint
+- [x] Create `/extract` endpoint (multipart PDF upload)
+- [x] Create `/extractUrl` endpoint (PDF from URL)
+- [x] Update webapp to call backend API
+- [x] Add workspace scripts to root package.json
+- [x] Update documentation
+
+### Backend Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | Health check |
+| `/extract` | POST | Upload PDF file, returns extracted events |
+| `/extractUrl` | POST | Provide PDF URL, returns extracted events |
+
+### Commands
+
+```bash
+# Install dependencies (from root)
+bun install
+
+# Start backend server
+bun run backend:dev
+
+# Start webapp
+bun run webapp:dev
+
+# Start both concurrently
+bun run dev
+
+# Test health endpoint
+curl http://localhost:3001/health
+
+# Test PDF extraction
+curl -X POST http://localhost:3001/extract \
+  -F "pdf=@test-heatsheet.pdf"
 ```
 
 ### Deliverable
 
-Upload PDF → extraction runs → raw JSON displayed
+Upload PDF → backend processes → AI extracts events → webapp displays results
 
 ---
 
-## Milestone 4: Search & Display
+## Milestone 3: Search & Display
 
 **Goal:** User can find their swimmer's events
 
@@ -160,7 +146,7 @@ Full flow from upload → search → see events
 
 ---
 
-## Milestone 5: Calendar Export
+## Milestone 4: Calendar Export
 
 **Goal:** Generate downloadable .ics files
 
@@ -184,7 +170,7 @@ Complete MVP - upload → search → export to calendar
 
 ---
 
-## Milestone 6: Polish & Launch
+## Milestone 5: Polish & Launch
 
 **Goal:** Production-ready MVP
 
@@ -195,7 +181,7 @@ Complete MVP - upload → search → export to calendar
 - [ ] Comprehensive error handling and user feedback
 - [ ] Loading skeletons and smooth animations
 - [ ] Mobile responsiveness testing (iOS Safari, Android Chrome)
-- [ ] Rate limiting on API proxy (protect shared token)
+- [ ] Rate limiting on backend API (protect shared token)
 - [ ] Add basic analytics (optional, privacy-respecting)
 - [ ] Write user-facing help/FAQ section
 - [ ] Create sample heat sheet for testing/demo
@@ -212,26 +198,38 @@ Launch-ready HeatSync v1.0
 ## Development Commands Reference
 
 ```bash
-# Start development server
+# Start development (both backend and webapp)
 bun run dev
 
-# Build for production
-bun run build
+# Start backend only
+bun run backend:dev
+
+# Start webapp only
+bun run webapp:dev
+
+# Build webapp for production
+bun run webapp:build
 
 # Preview production build
-bun run preview
+bun run webapp:preview
 
 # Type checking
-bun run check
+bun run webapp:check
 ```
 
 ## Environment Variables
 
+### Backend (`packages/backend/.env`)
 ```bash
-# .env
+PORT=3001
 OPENAI_API_KEY=your_api_key_here
 OPENAI_BASE_URL=https://api.openai.com/v1
-OPENAI_MODEL=gpt-5
+OPENAI_MODEL=gpt-4o
+```
+
+### Webapp (`packages/webapp/.env`)
+```bash
+PUBLIC_API_URL=http://localhost:3001
 ```
 
 ---
@@ -241,4 +239,5 @@ OPENAI_MODEL=gpt-5
 | Date | Milestone | Notes |
 |------|-----------|-------|
 | 2026-01-24 | 1 | Milestone 1 complete - monorepo structure, SvelteKit + TailwindCSS v4 + Svelte 5, all core UI components |
+| 2026-01-24 | 2 | Milestone 2 complete - Backend with Hono + mupdf + OpenAI SDK, shared types package, webapp integration |
 | 2026-01-24 | - | Development plan created |
