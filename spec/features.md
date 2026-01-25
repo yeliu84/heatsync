@@ -6,15 +6,15 @@ Core features required for initial launch.
 
 | Feature | Description | Status |
 |---------|-------------|--------|
-| PDF Upload | Drag-drop or file picker, preview thumbnails | Pending |
-| AI Extraction | Convert pages to images, send to API, parse response | Pending |
-| Swimmer Search | Filter extracted events by swimmer name (fuzzy match) | Pending |
-| Event Display | Show event name, heat, lane, seed time for matched swimmer | Pending |
+| PDF Upload | Drag-drop or file picker, swimmer name input | Complete |
+| AI Extraction | Upload PDF + swimmer name, AI extracts only that swimmer's events (swimmer-first) | Complete |
+| Swimmer Search | Server-side at extraction time (not client-side post-extraction) | Complete |
+| Event Display | Show event name, heat, lane, seed time for matched swimmer | Complete |
 | Event Selection | Checkboxes to select which events to export | Pending |
 | Reminder Choice | Radio buttons: 5, 10 (default), 15 min before | Pending |
 | .ics Export | Download .ics file with selected events | Pending |
-| Loading States | Progress indicators during extraction | Pending |
-| Error Handling | Clear messages for failed uploads/extraction | Pending |
+| Loading States | Progress indicators during extraction | Partial |
+| Error Handling | Clear messages for failed uploads/extraction | Partial |
 | Mobile Responsive | Works on phones (parents at meets) | Pending |
 
 ## Version 1.1 (Polish)
@@ -23,7 +23,7 @@ Enhancements based on user feedback.
 
 | Feature | Description | Status |
 |---------|-------------|--------|
-| URL paste input | Allow users to paste a URL to a heat sheet PDF instead of uploading | Ready |
+| URL paste input | Allow users to paste a URL to a heat sheet PDF instead of uploading | Complete (backend) |
 | Multi-swimmer search | Search for multiple swimmers at once (siblings) | Planned |
 | Google Calendar direct add | "Add to Google Calendar" button with pre-filled link | Planned |
 | Event time estimation | If times missing, estimate based on event order + avg duration | Planned |
@@ -60,6 +60,19 @@ Major features for scale and engagement.
 5. **As a parent of multiple swimmers**, I want to search for all my children at once so I can see overlapping events.
 
 6. **As a coach**, I want to share extracted meet data with my team so they don't each have to upload the same PDF.
+
+## AI Extraction Accuracy
+
+The extraction system has been optimized to handle real-world heat sheets accurately:
+
+| Challenge | Solution |
+|-----------|----------|
+| Multiple swimmers with same last name | Explicit disambiguation in prompt (e.g., "Liu, Elsa" ≠ "Liu, Elly") |
+| Name format variations | Input normalization handles both "First Last" and "Last, First" |
+| Incomplete scanning | Thoroughness instructions + final verification step |
+| Model non-determinism | temperature=0 for consistent results |
+| Session date ambiguity | Calculated from meet date range + weekday indicator |
+| Missing heat times | Estimation from previous heat times + seed times |
 
 ## Heat Sheet Variations
 

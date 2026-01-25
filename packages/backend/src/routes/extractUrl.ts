@@ -1,31 +1,43 @@
 import { Hono } from "hono";
-import { renderPdfToImages } from "@heatsync/backend/services/pdf";
-import { extractFromImages } from "@heatsync/backend/services/openai";
+import { extractFromPdf } from "@heatsync/backend/services/openai";
 import type {
-  ExtractUrlRequest,
   ExtractResponse,
   ExtractErrorResponse,
 } from "@heatsync/shared";
 
 export const extractUrlRoutes = new Hono();
 
+interface ExtractUrlRequestBody {
+  url: string;
+  swimmer: string;
+}
+
 /**
- * Extract swim meet data from a PDF URL
+ * Extract swim meet data for a specific swimmer from a PDF URL
  * POST /extractUrl
  *
- * Request: JSON { url: string }
+ * Request: JSON { url: string, swimmer: string }
  * Response: ExtractionResult JSON
  */
 extractUrlRoutes.post("/", async (c) => {
   try {
     // Parse request body
-    const body = await c.req.json<ExtractUrlRequest>();
+    const body = await c.req.json<ExtractUrlRequestBody>();
 
     if (!body.url) {
       const errorResponse: ExtractErrorResponse = {
         success: false,
         error: "No URL provided",
         details: 'Expected JSON body with "url" field',
+      };
+      return c.json(errorResponse, 400);
+    }
+
+    if (!body.swimmer) {
+      const errorResponse: ExtractErrorResponse = {
+        success: false,
+        error: "No swimmer name provided",
+        details: 'Expected JSON body with "swimmer" field',
       };
       return c.json(errorResponse, 400);
     }
@@ -54,6 +66,7 @@ extractUrlRoutes.post("/", async (c) => {
     }
 
     console.log(`Downloading PDF from: ${body.url}`);
+    console.log(`Looking for swimmer: ${body.swimmer}`);
 
     // Download the PDF
     const response = await fetch(body.url, {
@@ -86,22 +99,16 @@ extractUrlRoutes.post("/", async (c) => {
     const buffer = await response.arrayBuffer();
     console.log(`Downloaded ${buffer.byteLength} bytes`);
 
-    // Render PDF pages to images
-    console.log("Rendering PDF to images...");
-    const { images, pageCount } = await renderPdfToImages(buffer);
-    console.log(`Rendered ${images.length} pages`);
-
-    // Extract data using AI
-    console.log("Extracting data with AI...");
-    const extractionResult = await extractFromImages(images);
+    // Upload PDF directly to OpenAI for extraction
+    console.log("Uploading PDF to OpenAI...");
+    const extractionResult = await extractFromPdf(buffer, body.swimmer);
     console.log(
-      `Extracted ${extractionResult.events.length} events from ${extractionResult.meetName}`,
+      `Found ${extractionResult.events.length} events for ${body.swimmer}`,
     );
 
     const apiResponse: ExtractResponse = {
       success: true,
       data: extractionResult,
-      pageCount,
     };
 
     return c.json(apiResponse);

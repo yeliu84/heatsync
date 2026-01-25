@@ -59,18 +59,21 @@ Uploadable PDF that shows "extraction coming soon" placeholder
 
 **Status:** Complete
 
-### Architecture Change
+### Architecture Changes
 
-Moved from client-side pdf.js processing to server-side mupdf processing. This improves performance on low-end mobile devices (target users: swim parents on phones at the pool).
+#### 1. Server-Side PDF Processing
+Moved from client-side pdf.js processing to server-side processing. This improves performance on low-end mobile devices (target users: swim parents on phones at the pool).
 
-**Before:**
-```
-Browser → pdf.js → images → AI API
-```
+#### 2. Swimmer-First Extraction
+Requires swimmer name at extraction time for targeted extraction. Instead of extracting all events and filtering client-side, the AI extracts only the specified swimmer's events.
 
-**After:**
+#### 3. Model-Aware PDF Handling
+- **GPT models:** Upload PDF directly to OpenAI Files API (native PDF support)
+- **Non-GPT models:** Render PDF pages to images using mupdf
+
+**Architecture:**
 ```
-Browser → upload PDF → Backend (mupdf) → images → OpenAI API → results
+Browser → upload PDF + swimmer name → Backend → AI → swimmer's events only
 ```
 
 ### Tasks
@@ -112,9 +115,10 @@ bun run dev
 # Test health endpoint
 curl http://localhost:3001/health
 
-# Test PDF extraction
+# Test PDF extraction (requires swimmer name)
 curl -X POST http://localhost:3001/extract \
-  -F "pdf=@test-heatsheet.pdf"
+  -F "pdf=@test-heatsheet.pdf" \
+  -F "swimmer=John Smith"
 ```
 
 ### Deliverable
@@ -241,3 +245,5 @@ PUBLIC_API_URL=http://localhost:3001
 | 2026-01-24 | 1 | Milestone 1 complete - monorepo structure, SvelteKit + TailwindCSS v4 + Svelte 5, all core UI components |
 | 2026-01-24 | 2 | Milestone 2 complete - Backend with Hono + mupdf + OpenAI SDK, shared types package, webapp integration |
 | 2026-01-24 | - | Development plan created |
+| 2026-01-25 | 2 | Architecture update: Swimmer-first extraction - API now requires swimmer name, GPT models use direct PDF upload via Files API, non-GPT models use PDF→image rendering |
+| 2026-01-25 | 2 | Prompt accuracy improvements: Name normalization (handles "First Last" and "Last, First" input), disambiguation for swimmers with same last name, thoroughness instructions, session date calculation, heat start time extraction, temperature=0 for deterministic results |

@@ -1,258 +1,248 @@
 import OpenAI from "openai";
-import type { ExtractionResult, SwimEvent } from "@heatsync/shared";
-import type { ExtractionOptions } from "@heatsync/backend/types";
+import type { ExtractionResult } from "@heatsync/shared";
+import { renderPdfToImages } from "./pdf";
 
 /**
- * Extraction prompt for the AI model
- * Designed to extract swim meet data from heat sheet images
+ * Normalize swimmer name to consistent "First Last" format
+ * Handles input in either "First Last" or "Last, First" format
  */
-const EXTRACTION_PROMPT = `You are extracting swim meet data from heat sheet images. Extract ALL swimmers and events visible.
+const normalizeSwimmerName = (
+  name: string
+): { firstLast: string; lastFirst: string } => {
+  const trimmed = name.trim();
 
-Return a JSON object with this exact structure:
-{
-  "meetName": "string",
-  "meetDate": "YYYY-MM-DD",
-  "venue": "string or null",
-  "events": [
-    {
-      "eventNumber": number,
-      "eventName": "full event name",
-      "heatNumber": number,
-      "lane": number,
-      "swimmerName": "First Last",
-      "team": "team code or null",
-      "seedTime": "MM:SS.ss or NT",
-      "estimatedStartTime": "HH:MM or null"
-    }
-  ],
-  "warnings": ["any issues encountered during extraction"]
-}
+  if (trimmed.includes(",")) {
+    // Input is "Last, First" format - split and swap
+    const [last, first] = trimmed.split(",").map((s) => s.trim());
+    return {
+      firstLast: `${first} ${last}`,
+      lastFirst: `${last}, ${first}`,
+    };
+  }
 
-Important:
-- Extract EVERY swimmer from EVERY heat shown
-- Normalize swimmer names to "First Last" format (capitalize properly)
-- If seed time shows "NT", "NS", or is blank, use "NT"
-- Event numbers are usually in the left margin or header
-- Heat numbers appear above each heat block (e.g., "Heat 1 of 3")
-- Lanes are typically numbered 1-8 or 1-10
-- Estimated start times may appear at the top of each event
-- If you cannot determine the meet date, use today's date
-- Add any issues or uncertainties to the warnings array
+  // Input is "First Last" format - split and create both
+  const parts = trimmed.split(/\s+/);
+  if (parts.length >= 2) {
+    const first = parts.slice(0, -1).join(" ");
+    const last = parts[parts.length - 1];
+    return {
+      firstLast: trimmed,
+      lastFirst: `${last}, ${first}`,
+    };
+  }
 
-Return ONLY valid JSON, no markdown formatting or explanation.`;
+  // Single name - use as-is for both
+  return { firstLast: trimmed, lastFirst: trimmed };
+};
+
+/**
+ * Build extraction prompt for finding a specific swimmer's events
+ */
+const buildExtractionPrompt = (swimmerName: string): string => {
+  const { firstLast, lastFirst } = normalizeSwimmerName(swimmerName);
+
+  return `IMPORTANT: You MUST scan EVERY page of this heat sheet completely. Do NOT stop after finding some events - swimmers often appear in multiple events across different pages.
+
+Find ALL events for swimmer "${firstLast}" in this heat sheet. Return ONLY this JSON (no explanation):
+{"meetName":"string","sessionDate":"YYYY-MM-DD","meetDateRange":{"start":"YYYY-MM-DD","end":"YYYY-MM-DD"},"venue":"string|null","events":[{"eventNumber":1,"eventName":"string","heatNumber":1,"lane":1,"swimmerName":"First Last","team":"ABC","seedTime":"1:23.45","heatStartTime":"HH:MM"}],"warnings":[]}
+
+NAME MATCHING (CRITICAL):
+- The swimmer's name is: "${firstLast}" (also written as "${lastFirst}")
+- Heat sheets list names in "Last, First" format, so search for EXACTLY: "${lastFirst}"
+- Return swimmerName in "First Last" format: "${firstLast}"
+- IMPORTANT: There may be MULTIPLE swimmers with the same LAST NAME (e.g., multiple "Liu" swimmers)
+- You MUST match BOTH the first name AND last name EXACTLY - "${lastFirst}" only, not similar names
+- Do NOT include events for swimmers with similar names (e.g., "Liu, Elsa" is NOT "Liu, Elly" - different first names)
+
+CRITICAL RULES:
+- Scan ALL pages from start to finish before returning results
+- Include EVERY event where this swimmer appears
+- No swimmer found = empty events array + warning
+- seedTime: use "NT" if blank/NT/NS
+- Omit null fields
+
+SESSION DATE CALCULATION:
+1. The meet date range normally follows the meet name in format "<start date> to <end date>" (e.g., "1/16/2026 to 1/18/2026" or "2026-01-24 to 2026-01-25")
+2. Extract meetDateRange.start and meetDateRange.end from this range
+3. Determine which weekday the start date falls on (e.g., if 1/16/2026 then Friday)
+4. Heat sheets indicate which weekday the session is, found after "Meet Program" or near the meet name (e.g., "Saturday" or "Sat")
+5. Calculate sessionDate: start date + (session weekday - start weekday)
+   Example: start=Friday 1/16/2026, session=Saturday -> sessionDate = 1/17/2026
+6. If session weekday is not found, use the meet start date as sessionDate and add a warning
+
+HEAT START TIME:
+1. Extract heat start time from the PDF - it is normally displayed with the heat number (e.g., "Heat 3 - 10:45 AM")
+2. Return heatStartTime in 24-hour format "HH:MM" (e.g., "10:45" for 10:45 AM, "14:30" for 2:30 PM)
+3. If heat start time is not explicitly shown, estimate using: Heat Estimated Start Time = Previous Heat Start Time + Fastest Seed Time in Previous Heat
+4. If previous heat also has no start time, recursively apply the same formula above
+
+FINAL VERIFICATION:
+Before returning your response, re-scan the ENTIRE document one more time to confirm you haven't missed any events for "${firstLast}". Count the total events found and verify each one.`;
+};
 
 /**
  * Create OpenAI client from environment variables
  */
 const createOpenAIClient = (): OpenAI => {
-	const apiKey = process.env.OPENAI_API_KEY;
-	const baseURL = process.env.OPENAI_BASE_URL || "https://api.openai.com/v1";
+  const apiKey = Bun.env.OPENAI_API_KEY;
+  const baseURL = Bun.env.OPENAI_BASE_URL || "https://api.openai.com/v1";
 
-	if (!apiKey) {
-		throw new Error("OPENAI_API_KEY environment variable is required");
-	}
+  if (!apiKey) {
+    throw new Error("OPENAI_API_KEY environment variable is required");
+  }
 
-	return new OpenAI({
-		apiKey,
-		baseURL,
-	});
-};
-
-/** Default batch size for parallel API calls */
-const DEFAULT_BATCH_SIZE = 5;
-
-/** Default detail level for images */
-const DEFAULT_DETAIL: "low" | "high" = "low";
-
-/** Maximum retry attempts for failed batches */
-const MAX_RETRIES = 3;
-
-/** Base delay between retries (ms) - exponential backoff will multiply this */
-const RETRY_BASE_DELAY = 2000;
-
-/**
- * Sleep for a given number of milliseconds
- */
-const sleep = (ms: number): Promise<void> =>
-	new Promise((resolve) => setTimeout(resolve, ms));
-
-/**
- * Extract data from a single batch of images with retry logic
- */
-const extractBatch = async (
-	openai: OpenAI,
-	model: string,
-	images: string[],
-	batchIndex: number,
-	detail: "low" | "high"
-): Promise<ExtractionResult> => {
-	let lastError: Error | null = null;
-
-	for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-		try {
-			if (attempt > 0) {
-				const delay = RETRY_BASE_DELAY * Math.pow(2, attempt - 1);
-				console.log(
-					`  Batch ${batchIndex + 1}: Retry ${attempt}/${MAX_RETRIES - 1} after ${delay}ms...`
-				);
-				await sleep(delay);
-			}
-
-			console.log(
-				`  Batch ${batchIndex + 1}: Processing ${images.length} pages with detail="${detail}"...`
-			);
-
-			const content: OpenAI.Chat.Completions.ChatCompletionContentPart[] = [
-				{ type: "text", text: EXTRACTION_PROMPT },
-				...images.map(
-					(img): OpenAI.Chat.Completions.ChatCompletionContentPartImage => ({
-						type: "image_url",
-						image_url: { url: img, detail },
-					})
-				),
-			];
-
-			const response = await openai.chat.completions.create({
-				model,
-				messages: [{ role: "user", content }],
-				response_format: { type: "json_object" },
-				max_completion_tokens: 16000,
-			});
-
-			const responseText = response.choices[0]?.message?.content;
-
-			if (!responseText) {
-				throw new Error(`Empty response from AI model`);
-			}
-
-			const parsed = JSON.parse(responseText);
-
-			console.log(
-				`  Batch ${batchIndex + 1}: Extracted ${parsed.events?.length || 0} events`
-			);
-
-			return {
-				meetName: parsed.meetName || "Unknown Meet",
-				meetDate: new Date(parsed.meetDate || new Date().toISOString()),
-				venue: parsed.venue || undefined,
-				events: (parsed.events || []).map((event: Record<string, unknown>) => ({
-					eventNumber: Number(event.eventNumber) || 0,
-					eventName: String(event.eventName || "Unknown Event"),
-					heatNumber: Number(event.heatNumber) || 0,
-					lane: Number(event.lane) || 0,
-					swimmerName: String(event.swimmerName || "Unknown"),
-					team: event.team ? String(event.team) : undefined,
-					seedTime: event.seedTime ? String(event.seedTime) : undefined,
-					estimatedStartTime: event.estimatedStartTime
-						? new Date(`1970-01-01T${event.estimatedStartTime}:00`)
-						: undefined,
-				})),
-				warnings: parsed.warnings || undefined,
-			};
-		} catch (error) {
-			lastError = error instanceof Error ? error : new Error(String(error));
-			console.error(
-				`  Batch ${batchIndex + 1}: Attempt ${attempt + 1} failed: ${lastError.message}`
-			);
-		}
-	}
-
-	throw new Error(
-		`Batch ${batchIndex + 1} failed after ${MAX_RETRIES} attempts: ${lastError?.message}`
-	);
+  return new OpenAI({
+    apiKey,
+    baseURL,
+  });
 };
 
 /**
- * Create a unique key for deduplication
+ * Parse API response into ExtractionResult
  */
-const eventKey = (event: SwimEvent): string =>
-	`${event.eventNumber}-${event.heatNumber}-${event.lane}-${event.swimmerName}`;
+const parseExtractionResponse = (responseText: string): ExtractionResult => {
+  const parsed = JSON.parse(responseText);
 
-/**
- * Aggregate results from multiple batches
- * - Takes meet info from the first batch (most likely to have title page info)
- * - Merges and deduplicates events by composite key
- * - Combines all warnings
- */
-const aggregateBatchResults = (
-	batchResults: ExtractionResult[]
-): ExtractionResult => {
-	if (batchResults.length === 0) {
-		throw new Error("No batch results to aggregate");
-	}
+  // Parse sessionDate with fallback to meetDate for backward compatibility
+  const sessionDateStr = parsed.sessionDate || parsed.meetDate;
+  const sessionDate = sessionDateStr
+    ? new Date(sessionDateStr)
+    : new Date();
 
-	// Use meet info from first batch (most likely to have complete info)
-	const firstResult = batchResults[0];
+  // Parse optional meetDateRange
+  const meetDateRange = parsed.meetDateRange
+    ? {
+        start: new Date(parsed.meetDateRange.start),
+        end: new Date(parsed.meetDateRange.end),
+      }
+    : undefined;
 
-	// Deduplicate events by composite key
-	const eventMap = new Map<string, SwimEvent>();
-	for (const result of batchResults) {
-		for (const event of result.events) {
-			const key = eventKey(event);
-			if (!eventMap.has(key)) {
-				eventMap.set(key, event);
-			}
-		}
-	}
-
-	// Sort events by eventNumber, then heatNumber, then lane
-	const events = Array.from(eventMap.values()).sort((a, b) => {
-		if (a.eventNumber !== b.eventNumber) return a.eventNumber - b.eventNumber;
-		if (a.heatNumber !== b.heatNumber) return a.heatNumber - b.heatNumber;
-		return a.lane - b.lane;
-	});
-
-	// Combine all warnings
-	const allWarnings = batchResults
-		.flatMap((r) => r.warnings || [])
-		.filter((w, i, arr) => arr.indexOf(w) === i); // Dedupe
-
-	return {
-		meetName: firstResult.meetName,
-		meetDate: firstResult.meetDate,
-		venue: firstResult.venue,
-		events,
-		warnings: allWarnings.length > 0 ? allWarnings : undefined,
-	};
+  return {
+    meetName: parsed.meetName || "Unknown Meet",
+    sessionDate,
+    meetDateRange,
+    venue: parsed.venue || undefined,
+    events: (parsed.events || []).map((event: Record<string, unknown>) => ({
+      eventNumber: Number(event.eventNumber) || 0,
+      eventName: String(event.eventName || "Unknown Event"),
+      heatNumber: Number(event.heatNumber) || 0,
+      lane: Number(event.lane) || 0,
+      swimmerName: String(event.swimmerName || "Unknown"),
+      team: event.team ? String(event.team) : undefined,
+      seedTime: event.seedTime ? String(event.seedTime) : undefined,
+      heatStartTime: event.heatStartTime ? String(event.heatStartTime) : undefined,
+    })),
+    warnings: parsed.warnings || undefined,
+  };
 };
 
 /**
- * Extract swim meet data from heat sheet images using AI
+ * Check if model supports direct PDF file upload (GPT models)
+ */
+const isGptModel = (model: string): boolean => {
+  return model.startsWith("gpt-");
+};
+
+type MessageContent = OpenAI.Chat.Completions.ChatCompletionContentPart[];
+
+/**
+ * Build message content for GPT models (direct PDF file upload)
+ */
+const buildGptContent = async (
+  openai: OpenAI,
+  buffer: ArrayBuffer,
+  swimmerName: string
+): Promise<MessageContent> => {
+  console.log("Using direct PDF file upload...");
+
+  const file = await openai.files.create({
+    file: new File([buffer], "heatsheet.pdf", { type: "application/pdf" }),
+    purpose: "user_data",
+  });
+
+  console.log(`Uploaded PDF as file_id: ${file.id}`);
+
+  return [
+    { type: "file", file: { file_id: file.id } },
+    { type: "text", text: buildExtractionPrompt(swimmerName) },
+  ];
+};
+
+/**
+ * Build message content for non-GPT models (image rendering)
+ */
+const buildImageContent = (
+  buffer: ArrayBuffer,
+  swimmerName: string
+): MessageContent => {
+  console.log("Using PDF-to-image rendering...");
+
+  const images = renderPdfToImages(buffer);
+  console.log(`Rendered ${images.length} pages`);
+
+  return [
+    ...images.map(
+      (url): OpenAI.Chat.Completions.ChatCompletionContentPartImage => ({
+        type: "image_url",
+        image_url: { url, detail: "high" },
+      })
+    ),
+    { type: "text", text: buildExtractionPrompt(swimmerName) },
+  ];
+};
+
+/**
+ * Extract swim meet data for a specific swimmer from a PDF
  *
- * @param images - Array of base64 PNG data URLs
- * @param options - Extraction options (detail level, batch size)
- * @returns Parsed extraction result
+ * Uses direct PDF upload for GPT models, image rendering for others.
+ *
+ * @param buffer - PDF file content as ArrayBuffer
+ * @param swimmerName - Name of the swimmer to search for
+ * @returns Parsed extraction result with only that swimmer's events
  */
-export const extractFromImages = async (
-	images: string[],
-	options: ExtractionOptions = {}
+export const extractFromPdf = async (
+  buffer: ArrayBuffer,
+  swimmerName: string
 ): Promise<ExtractionResult> => {
-	const { detail = DEFAULT_DETAIL, batchSize = DEFAULT_BATCH_SIZE } = options;
-	const openai = createOpenAIClient();
-	const model = process.env.OPENAI_MODEL || "gpt-4o";
+  const openai = createOpenAIClient();
+  const model = Bun.env.OPENAI_MODEL || "gpt-4o";
+  const useGpt = isGptModel(model);
 
-	// Split images into batches
-	const batches: string[][] = [];
-	for (let i = 0; i < images.length; i += batchSize) {
-		batches.push(images.slice(i, i + batchSize));
-	}
+  console.log(`Processing PDF (${buffer.byteLength} bytes) with model: ${model}`);
+  console.log(`Searching for swimmer: ${swimmerName}`);
 
-	console.log(
-		`Processing ${images.length} pages in ${batches.length} batch(es) (batchSize=${batchSize}, detail=${detail})`
-	);
+  // Build content based on model type
+  const content = useGpt
+    ? await buildGptContent(openai, buffer, swimmerName)
+    : buildImageContent(buffer, swimmerName);
 
-	// Process all batches in parallel with small stagger to avoid rate limits
-	const STAGGER_DELAY = 500; // ms between batch starts
-	const batchResults = await Promise.all(
-		batches.map(async (batch, index) => {
-			// Stagger batch starts to reduce rate limit pressure
-			if (index > 0) {
-				await sleep(index * STAGGER_DELAY);
-			}
-			return extractBatch(openai, model, batch, index, detail);
-		})
-	);
+  const response = await openai.chat.completions.create({
+    model,
+    messages: [{ role: "user", content }],
+    response_format: { type: "json_object" },
+    temperature: 0,
+    ...(useGpt
+      ? { max_completion_tokens: 16000 }
+      : { max_tokens: 16000 }),
+  });
 
-	// Aggregate results from all batches
-	return aggregateBatchResults(batchResults);
+  const responseText = response.choices[0]?.message?.content;
+
+  if (!responseText) {
+    console.error(
+      "Response structure:",
+      JSON.stringify({
+        finish_reason: response.choices[0]?.finish_reason,
+        refusal: response.choices[0]?.message?.refusal,
+      })
+    );
+    throw new Error(
+      `Empty response from AI model (finish_reason: ${response.choices[0]?.finish_reason})`
+    );
+  }
+
+  const result = parseExtractionResponse(responseText);
+  console.log(`Found ${result.events.length} events for ${swimmerName}`);
+
+  return result;
 };

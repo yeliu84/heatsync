@@ -1,15 +1,16 @@
 import { Hono } from "hono";
-import { renderPdfToImages } from "@heatsync/backend/services/pdf";
-import { extractFromImages } from "@heatsync/backend/services/openai";
+import { extractFromPdf } from "@heatsync/backend/services/openai";
 import type { ExtractResponse, ExtractErrorResponse } from "@heatsync/shared";
 
 export const extractRoutes = new Hono();
 
 /**
- * Extract swim meet data from an uploaded PDF
+ * Extract swim meet data for a specific swimmer from an uploaded PDF
  * POST /extract
  *
- * Request: multipart/form-data with "pdf" file field
+ * Request: multipart/form-data with:
+ *   - "pdf": PDF file
+ *   - "swimmer": Swimmer name to search for
  * Response: ExtractionResult JSON
  */
 extractRoutes.post("/", async (c) => {
@@ -17,12 +18,22 @@ extractRoutes.post("/", async (c) => {
     // Parse multipart form data
     const formData = await c.req.formData();
     const file = formData.get("pdf");
+    const swimmerName = formData.get("swimmer");
 
     if (!file || !(file instanceof File)) {
       const errorResponse: ExtractErrorResponse = {
         success: false,
         error: "No PDF file provided",
         details: 'Expected multipart/form-data with a "pdf" file field',
+      };
+      return c.json(errorResponse, 400);
+    }
+
+    if (!swimmerName || typeof swimmerName !== "string") {
+      const errorResponse: ExtractErrorResponse = {
+        success: false,
+        error: "No swimmer name provided",
+        details: 'Expected multipart/form-data with a "swimmer" field',
       };
       return c.json(errorResponse, 400);
     }
@@ -38,29 +49,19 @@ extractRoutes.post("/", async (c) => {
     }
 
     console.log(`Processing PDF: ${file.name} (${file.size} bytes)`);
+    console.log(`Looking for swimmer: ${swimmerName}`);
 
-    // Convert PDF to ArrayBuffer
+    // Convert to ArrayBuffer and upload directly to OpenAI
     const buffer = await file.arrayBuffer();
 
-    // Render PDF pages to images
-    console.log("Rendering PDF to images...");
-    const { images, pageCount } = await renderPdfToImages(buffer);
-    console.log(`Rendered ${images.length} pages`);
+    console.log("Uploading PDF to OpenAI...");
+    const extractionResult = await extractFromPdf(buffer, swimmerName);
 
-    // Extract data using AI with optimized settings
-    console.log("Extracting data with AI...");
-    const extractionResult = await extractFromImages(images, {
-      detail: "low",
-      batchSize: 5,
-    });
-    console.log(
-      `Extracted ${extractionResult.events.length} events from ${extractionResult.meetName}`,
-    );
+    console.log(`Found ${extractionResult.events.length} events for ${swimmerName}`);
 
     const response: ExtractResponse = {
       success: true,
       data: extractionResult,
-      pageCount,
     };
 
     return c.json(response);

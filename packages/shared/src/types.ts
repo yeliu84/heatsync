@@ -9,7 +9,7 @@ export interface SwimEvent {
 	swimmerName: string;
 	team?: string;
 	seedTime?: string; // e.g., "1:05.32" or "NT"
-	estimatedStartTime?: Date; // Parsed from heat sheet if available
+	heatStartTime?: string; // "HH:MM" 24-hour format
 }
 
 /**
@@ -17,7 +17,12 @@ export interface SwimEvent {
  */
 export interface ExtractionResult {
 	meetName: string;
-	meetDate: Date;
+	sessionDate: Date; // Calculated from meet start date + session weekday
+	meetDateRange?: {
+		// Optional full meet date range
+		start: Date;
+		end: Date;
+	};
 	venue?: string;
 	events: SwimEvent[];
 	warnings?: string[]; // e.g., "Could not parse times for Event 5"
@@ -63,7 +68,7 @@ export interface ExtractUrlRequest {
 export interface ExtractResponse {
 	success: true;
 	data: ExtractionResult;
-	pageCount: number;
+	pageCount?: number;
 }
 
 export interface ExtractErrorResponse {

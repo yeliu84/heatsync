@@ -13,6 +13,18 @@
 		if (!time) return 'NT';
 		return time;
 	}
+
+	/**
+	 * Convert 24-hour format "HH:MM" to 12-hour format "H:MM AM/PM"
+	 */
+	function formatHeatTime(time24?: string): string {
+		if (!time24) return '';
+		const [hourStr, minute] = time24.split(':');
+		const hour = parseInt(hourStr, 10);
+		const period = hour >= 12 ? 'PM' : 'AM';
+		const hour12 = hour % 12 || 12;
+		return `${hour12}:${minute} ${period}`;
+	}
 </script>
 
 <button
@@ -31,6 +43,9 @@
 				</span>
 				<span class="text-xs text-sky-500">
 					Heat {event.heatNumber} | Lane {event.lane}
+					{#if event.heatStartTime}
+						| {formatHeatTime(event.heatStartTime)}
+					{/if}
 				</span>
 			</div>
 			<h3 class="mt-2 font-medium text-sky-900">{event.swimmerName}</h3>

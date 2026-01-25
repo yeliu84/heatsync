@@ -41,16 +41,17 @@ The flake provides:
 ┌─────────────────────────────────────────────────────────────┐
 │                        Frontend                              │
 │  SvelteKit + TypeScript + TailwindCSS                       │
-│  - PDF upload interface                                      │
-│  - Swimmer search & event display                           │
+│  - PDF upload interface + swimmer name input                │
+│  - Event display & selection                                │
 │  - Calendar event builder                                    │
 └─────────────────────────────────────────────────────────────┘
                               │
+                        PDF + Swimmer name
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                    Hono Backend Server                       │
-│  POST /extract - Upload PDF, process, extract with AI       │
-│  POST /extractUrl - Download PDF from URL, process, extract │
+│  POST /extract - Upload PDF + swimmer, extract with AI      │
+│  POST /extractUrl - PDF URL + swimmer, extract with AI      │
 │  GET /health - Health check endpoint                        │
 └─────────────────────────────────────────────────────────────┘
                               │
@@ -133,12 +134,16 @@ interface SwimEvent {
   swimmerName: string;
   team?: string;
   seedTime?: string;          // e.g., "1:05.32" or "NT"
-  estimatedStartTime?: Date;  // Parsed from heat sheet if available
+  heatStartTime?: string;     // "HH:MM" 24-hour format
 }
 
 interface ExtractionResult {
   meetName: string;
-  meetDate: Date;
+  sessionDate: Date;          // Calculated from meet start date + session weekday
+  meetDateRange?: {           // Optional full meet date range
+    start: Date;
+    end: Date;
+  };
   venue?: string;
   events: SwimEvent[];
   warnings?: string[];        // e.g., "Could not parse times for Event 5"
@@ -157,27 +162,29 @@ interface CalendarEvent {
 
 ### POST /extract
 
-Upload a PDF file for extraction.
+Upload a PDF file for swimmer-specific extraction.
 
-**Request:** `multipart/form-data` with `pdf` file field
+**Request:** `multipart/form-data` with:
+- `pdf`: PDF file
+- `swimmer`: Name of swimmer to search for
 
 **Response:**
 ```json
 {
   "success": true,
-  "data": { /* ExtractionResult */ },
-  "pageCount": 12
+  "data": { /* ExtractionResult */ }
 }
 ```
 
 ### POST /extractUrl
 
-Extract from a PDF URL.
+Extract from a PDF URL for a specific swimmer.
 
 **Request:**
 ```json
 {
-  "url": "https://example.com/heatsheet.pdf"
+  "url": "https://example.com/heatsheet.pdf",
+  "swimmer": "John Smith"
 }
 ```
 
@@ -246,13 +253,36 @@ OPENAI_BASE_URL=http://localhost:11434/v1
 OPENAI_MODEL=llava
 ```
 
-### Extraction Strategy
+### Extraction Strategy (Swimmer-First)
 
-1. Client uploads PDF to backend `/extract` endpoint
-2. Backend renders PDF pages to images using mupdf
-3. Backend sends images to configured AI endpoint
-4. AI extracts structured data from heat sheet images
-5. Backend returns parsed `ExtractionResult` to client
+1. Client uploads PDF + swimmer name to backend `/extract` endpoint
+2. Backend normalizes swimmer name (handles both "First Last" and "Last, First" input formats)
+3. For GPT models: Backend uploads PDF directly to OpenAI Files API
+   For other models: Backend renders PDF pages to images using mupdf
+4. AI extracts events for the specified swimmer only using enhanced prompt
+5. Backend returns targeted `ExtractionResult` to client
+
+> **Why swimmer-first?** Extracting only the requested swimmer's events reduces AI token usage by ~90%, improves response latency, and generates smaller payloads. The previous "extract all, filter later" approach was wasteful for typical single-swimmer use cases.
+
+### AI Prompt Engineering
+
+The extraction prompt has been optimized for accuracy with faster models (e.g., GPT-4o-mini, GPT-5.2):
+
+| Enhancement | Purpose |
+|-------------|---------|
+| **Name Normalization** | Converts input to both "First Last" and "Last, First" formats for reliable matching |
+| **Disambiguation** | Explicit warning that multiple swimmers may share last names (e.g., "Liu, Elsa" vs "Liu, Elly") |
+| **Thoroughness** | Instructions to scan ALL pages before returning, prevents early termination |
+| **Session Date Calculation** | Derives session date from meet date range + weekday indicator |
+| **Heat Start Time** | Extracts explicit times or estimates from previous heat times |
+| **Final Verification** | Re-scan instruction before returning results |
+| **temperature: 0** | Deterministic output for consistent extraction |
+
+Example disambiguation instruction in prompt:
+```
+- IMPORTANT: There may be MULTIPLE swimmers with the same LAST NAME
+- Do NOT include events for swimmers with similar names (e.g., "Liu, Elsa" is NOT "Liu, Elly")
+```
 
 ### Model Requirements
 

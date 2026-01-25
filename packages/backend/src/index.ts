@@ -23,7 +23,7 @@ app.onError((err, c) => {
 		{
 			success: false,
 			error: "Internal server error",
-			details: process.env.NODE_ENV === "development" ? err.message : undefined,
+			details: Bun.env.NODE_ENV === "development" ? err.message : undefined,
 		},
 		500
 	);
@@ -40,7 +40,7 @@ app.notFound((c) => {
 	);
 });
 
-const port = parseInt(process.env.PORT || "3001", 10);
+const port = parseInt(Bun.env.PORT || "3001", 10);
 
 console.log(`Starting HeatSync backend on port ${port}...`);
 
