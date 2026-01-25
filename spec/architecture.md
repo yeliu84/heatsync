@@ -215,6 +215,26 @@ Health check endpoint.
 | State Management | Svelte stores | Simple, built-in, sufficient for stateless app |
 | Styling | TailwindCSS v4 | Rapid prototyping, responsive design, CSS-first config |
 
+## UI State Management
+
+### App States
+
+The application uses a simple state machine stored in `appState`:
+
+| State | Description | UI Behavior |
+|-------|-------------|-------------|
+| `upload` | Initial state, waiting for input | Form enabled, button shows "Find My Events" |
+| `extracting` | Processing PDF with AI | Form disabled, button shows spinner + status text |
+| `search` | Extraction complete | Form disabled, button shows "Found X events!", results visible |
+| `export` | Events selected for export | Same as search, export section active |
+
+### Form State Behavior
+
+- **During extraction (`extracting`):** All form fields disabled, button shows real-time status with spinner ("Fetching PDF from URL...", "Processing PDF...")
+- **After extraction (`search`):** Form remains disabled to prevent accidental re-submission, button displays result count
+- **Result sections:** Only appear when `extractionResult` contains events (not just when state changes)
+- **Start Over:** Resets all stores to initial state via `resetStores()`, returns to `upload` state
+
 ## AI API Integration
 
 ### Configuration

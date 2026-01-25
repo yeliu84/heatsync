@@ -197,78 +197,75 @@
 </script>
 
 <div class="space-y-6">
-	<!-- Section 1: Swimmer Name (Required) -->
+	<!-- Swimmer Name (Required) -->
 	<div class="space-y-2">
 		<label for="swimmer-name" class="block text-sm font-medium text-sky-800">
-			1. Swimmer Name <span class="text-red-500">*</span>
+			Swimmer <span class="text-red-500">*</span>
 		</label>
 		<input
 			id="swimmer-name"
 			type="text"
 			bind:value={localSwimmerName}
 			placeholder="Enter swimmer's name (e.g., John Smith)"
-			disabled={$appState === 'extracting'}
+			disabled={$appState === 'extracting' || $appState === 'search'}
 			class="w-full rounded-lg border border-sky-200 bg-white px-4 py-3 text-sky-900 placeholder-sky-400 transition-colors focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200 disabled:cursor-not-allowed disabled:opacity-50"
 		/>
 	</div>
 
-	<!-- Section 2: Heat Sheet URL -->
+	<!-- Heat Sheet (URL or Upload) -->
 	<div class="space-y-2">
-		<label for="pdf-url" class="block text-sm font-medium text-sky-800"> 2. Heat Sheet URL </label>
-		<div class="relative flex gap-2">
-			<input
-				id="pdf-url"
-				type="url"
-				bind:value={pdfUrl}
-				placeholder="https://example.com/heatsheet.pdf"
-				disabled={$appState === 'extracting'}
-				class="flex-1 rounded-lg border border-sky-200 bg-white px-4 py-3 text-sky-900 placeholder-sky-400 transition-colors focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200 disabled:cursor-not-allowed disabled:opacity-50"
-			/>
-			<button
-				type="button"
-				onclick={pasteFromClipboard}
-				disabled={$appState === 'extracting'}
-				class="flex items-center justify-center rounded-lg border border-sky-200 bg-white px-3 text-sky-600 transition-colors hover:bg-sky-50 hover:text-sky-700 disabled:cursor-not-allowed disabled:opacity-50"
-				title="Paste from clipboard"
-				aria-label="Paste URL from clipboard"
-			>
-				<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-					<path
-						stroke-linecap="round"
-						stroke-linejoin="round"
-						stroke-width="2"
-						d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"
-					/>
-				</svg>
-			</button>
-		</div>
-	</div>
+		<span class="block text-sm font-medium text-sky-800">Heat Sheet <span class="text-red-500">*</span></span>
+		<div class="space-y-4 rounded-lg border border-sky-100 bg-sky-50/50 p-4">
+			<!-- URL input -->
+			<div class="relative flex gap-2">
+				<input
+					id="pdf-url"
+					type="url"
+					bind:value={pdfUrl}
+					placeholder="Enter URL to PDF e.g. https://example.com/heatsheet.pdf"
+					disabled={$appState === 'extracting' || $appState === 'search'}
+					class="flex-1 rounded-lg border border-sky-200 bg-white px-4 py-3 text-sky-900 placeholder-sky-400 transition-colors focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200 disabled:cursor-not-allowed disabled:opacity-50"
+				/>
+				<button
+					type="button"
+					onclick={pasteFromClipboard}
+					disabled={$appState === 'extracting' || $appState === 'search'}
+					class="flex items-center justify-center rounded-lg border border-sky-200 bg-white px-3 text-sky-600 transition-colors hover:bg-sky-50 hover:text-sky-700 disabled:cursor-not-allowed disabled:opacity-50"
+					title="Paste from clipboard"
+					aria-label="Paste URL from clipboard"
+				>
+					<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+						<path
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							stroke-width="2"
+							d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"
+						/>
+					</svg>
+				</button>
+			</div>
 
-	<!-- Divider -->
-	<div class="flex items-center gap-4">
-		<div class="h-px flex-1 bg-sky-200"></div>
-		<span class="text-sm text-sky-400">or</span>
-		<div class="h-px flex-1 bg-sky-200"></div>
-	</div>
+			<!-- Divider -->
+			<div class="flex items-center gap-4">
+				<div class="h-px flex-1 bg-sky-200"></div>
+				<span class="text-base font-medium text-sky-400">OR</span>
+				<div class="h-px flex-1 bg-sky-200"></div>
+			</div>
 
-	<!-- Section 3: Upload PDF -->
-	<div class="space-y-2">
-		<span class="block text-sm font-medium text-sky-800"> 3. Upload PDF </span>
-
-		{#if !$uploadedPdf}
 			<!-- Upload zone -->
+			{#if !$uploadedPdf}
 			<button
 				type="button"
 				class="w-full cursor-pointer rounded-xl border-2 border-dashed p-6 text-center transition-all duration-200
 					{isDragOver
 					? 'border-sky-500 bg-sky-50'
 					: 'border-sky-200 bg-white hover:border-sky-400 hover:bg-sky-50'}
-					{$appState === 'extracting' ? 'cursor-not-allowed opacity-50' : ''}"
+					{$appState === 'extracting' || $appState === 'search' ? 'cursor-not-allowed opacity-50' : ''}"
 				ondrop={handleDrop}
 				ondragover={handleDragOver}
 				ondragleave={handleDragLeave}
 				onclick={openFilePicker}
-				disabled={$appState === 'extracting'}
+				disabled={$appState === 'extracting' || $appState === 'search'}
 			>
 				<div class="flex flex-col items-center gap-2">
 					<div
@@ -278,10 +275,10 @@
 						<span role="img" aria-label="document">📄</span>
 					</div>
 					<div>
-						<p class="text-base font-medium text-sky-900">
-							{isDragOver ? 'Drop your heat sheet here' : 'Drag & drop or click'}
+						<p class="text-base text-sky-400">
+							{isDragOver ? 'Drop your PDF here' : 'Drag & drop the PDF here, or click to select'}
 						</p>
-						<p class="mt-1 text-sm text-sky-500">PDF files up to 50MB</p>
+						<p class="mt-1 text-sm text-sky-900">PDF files up to 50MB</p>
 					</div>
 				</div>
 			</button>
@@ -306,7 +303,7 @@
 							<p class="text-sm text-sky-600">{formatFileSize($uploadedPdf.size)}</p>
 						</div>
 					</div>
-					{#if $appState !== 'extracting'}
+					{#if $appState !== 'extracting' && $appState !== 'search'}
 						<button
 							type="button"
 							onclick={removeFile}
@@ -325,7 +322,8 @@
 					{/if}
 				</div>
 			</div>
-		{/if}
+			{/if}
+		</div>
 	</div>
 
 	<!-- Error message -->
@@ -335,10 +333,15 @@
 		</div>
 	{/if}
 
-	<!-- Extraction status -->
-	{#if extractionStatus}
-		<div class="flex items-center gap-3 text-sky-600">
-			{#if $appState === 'extracting'}
+	<!-- Submit button -->
+	<button
+		type="button"
+		onclick={startExtraction}
+		disabled={!isFormValid || $appState === 'extracting' || $appState === 'search'}
+		class="w-full rounded-lg bg-sky-500 px-4 py-3 text-lg font-medium text-white transition-colors hover:bg-sky-600 disabled:cursor-not-allowed disabled:bg-sky-200 disabled:text-sky-400"
+	>
+		{#if $appState === 'extracting'}
+			<span class="flex items-center justify-center gap-2">
 				<svg
 					class="h-5 w-5 animate-spin"
 					xmlns="http://www.w3.org/2000/svg"
@@ -359,20 +362,10 @@
 						d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
 					></path>
 				</svg>
-			{/if}
-			<span>{extractionStatus}</span>
-		</div>
-	{/if}
-
-	<!-- Submit button -->
-	<button
-		type="button"
-		onclick={startExtraction}
-		disabled={!isFormValid || $appState === 'extracting'}
-		class="w-full rounded-lg bg-sky-500 px-4 py-3 text-lg font-medium text-white transition-colors hover:bg-sky-600 disabled:cursor-not-allowed disabled:opacity-50"
-	>
-		{#if $appState === 'extracting'}
-			Processing...
+				{extractionStatus || 'Processing...'}
+			</span>
+		{:else if $appState === 'search' && extractionStatus}
+			{extractionStatus}
 		{:else}
 			🔍 Find My Events
 		{/if}

@@ -3,7 +3,11 @@
 	import SwimmerSearch from '$lib/components/SwimmerSearch.svelte';
 	import EventList from '$lib/components/EventList.svelte';
 	import CalendarExport from '$lib/components/CalendarExport.svelte';
-	import { appState, extractionResult, selectedEventIds } from '$lib/stores/extraction';
+	import { appState, extractionResult, selectedEventIds, resetStores } from '$lib/stores/extraction';
+
+	const handleStartOver = () => {
+		resetStores();
+	};
 </script>
 
 <!-- Hero Header -->
@@ -20,8 +24,8 @@
 		<HeatSheetForm />
 	</section>
 
-	<!-- Steps 2-4: Only show after extraction starts -->
-	{#if $appState !== 'upload' || $extractionResult}
+	<!-- Steps 2-4: Only show when events are found -->
+	{#if $extractionResult && $extractionResult.events.length > 0}
 		<!-- Step 2: Search -->
 		<section>
 			<SwimmerSearch disabled={$appState === 'extracting'} />
@@ -42,5 +46,16 @@
 		<section>
 			<CalendarExport disabled={$selectedEventIds.size === 0} />
 		</section>
+
+		<!-- Start Over -->
+		<div class="text-center">
+			<button
+				type="button"
+				onclick={handleStartOver}
+				class="text-sky-500 hover:text-sky-600 hover:underline"
+			>
+				Start Over
+			</button>
+		</div>
 	{/if}
 </div>

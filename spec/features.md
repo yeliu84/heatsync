@@ -13,7 +13,8 @@ Core features required for initial launch.
 | Event Selection | Checkboxes to select which events to export | Pending |
 | Reminder Choice | Radio buttons: 5, 10 (default), 15 min before | Pending |
 | .ics Export | Download .ics file with selected events | Pending |
-| Loading States | Progress indicators during extraction | Partial |
+| Loading States | Progress indicators during extraction, status in button | Complete |
+| Form State Management | Disable form after processing, "Start Over" to reset | Complete |
 | Error Handling | Clear messages for failed uploads/extraction | Partial |
 | Mobile Responsive | Works on phones (parents at meets) | Pending |
 
