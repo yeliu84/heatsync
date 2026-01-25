@@ -1,5 +1,16 @@
 import { writable, derived } from 'svelte/store';
-import type { AppState, ExtractionResult, UploadedPdf } from '$lib/types';
+import type { AppState, ExtractionResult, UploadedPdf, SwimEvent } from '$lib/types';
+
+/**
+ * Unique swimmer profile for disambiguation
+ * When multiple swimmers share the same name, we use team + age to differentiate
+ */
+export interface SwimmerProfile {
+	swimmerName: string;
+	team?: string;
+	age?: number;
+	key: string; // Unique identifier: "name|team|age"
+}
 
 /**
  * Current application workflow state
@@ -32,17 +43,67 @@ export const selectedEventIds = writable<Set<number>>(new Set());
 export const searchQuery = writable<string>('');
 
 /**
- * Derived store: events filtered by search query
+ * Currently selected swimmer profile for disambiguation
+ * null means no profile selected (show all events)
+ */
+export const selectedProfile = writable<SwimmerProfile | null>(null);
+
+/**
+ * Derived store: unique swimmer profiles from extraction result
+ * Used for disambiguation when multiple swimmers share the same name
+ */
+export const swimmerProfiles = derived(extractionResult, ($result): SwimmerProfile[] => {
+	if (!$result) return [];
+
+	const profileMap = new Map<string, SwimmerProfile>();
+	for (const event of $result.events) {
+		const key = `${event.swimmerName}|${event.team || ''}|${event.age || ''}`;
+		if (!profileMap.has(key)) {
+			profileMap.set(key, {
+				swimmerName: event.swimmerName,
+				team: event.team,
+				age: event.age,
+				key
+			});
+		}
+	}
+	return Array.from(profileMap.values());
+});
+
+/**
+ * Derived store: whether disambiguation is needed (multiple profiles with same name)
+ */
+export const needsDisambiguation = derived(swimmerProfiles, ($profiles): boolean => $profiles.length > 1);
+
+/**
+ * Derived store: events filtered by selected profile
+ * Returns all events if no profile is selected
+ */
+export const profileFilteredEvents = derived(
+	[extractionResult, selectedProfile],
+	([$result, $profile]): SwimEvent[] => {
+		if (!$result) return [];
+		if (!$profile) return $result.events;
+
+		return $result.events.filter(
+			(event) =>
+				event.swimmerName === $profile.swimmerName &&
+				event.team === $profile.team &&
+				event.age === $profile.age
+		);
+	}
+);
+
+/**
+ * Derived store: events filtered by search query (applied on top of profile filter)
  */
 export const filteredEvents = derived(
-	[extractionResult, searchQuery],
-	([$extractionResult, $searchQuery]) => {
-		if (!$extractionResult) return [];
-
+	[profileFilteredEvents, searchQuery],
+	([$profileFilteredEvents, $searchQuery]): SwimEvent[] => {
 		const query = $searchQuery.toLowerCase().trim();
-		if (!query) return $extractionResult.events;
+		if (!query) return $profileFilteredEvents;
 
-		return $extractionResult.events.filter(
+		return $profileFilteredEvents.filter(
 			(event) =>
 				event.swimmerName.toLowerCase().includes(query) ||
 				event.team?.toLowerCase().includes(query) ||
@@ -73,6 +134,7 @@ export function resetStores(): void {
 	extractionResult.set(null);
 	selectedEventIds.set(new Set());
 	searchQuery.set('');
+	selectedProfile.set(null);
 }
 
 /**
@@ -106,4 +168,12 @@ export function selectAllFiltered(eventIndices: number[]): void {
  */
 export function clearSelections(): void {
 	selectedEventIds.set(new Set());
+}
+
+/**
+ * Select all events (used for initial auto-selection)
+ */
+export function selectAllEvents(count: number): void {
+	const indices = Array.from({ length: count }, (_, i) => i);
+	selectedEventIds.set(new Set(indices));
 }

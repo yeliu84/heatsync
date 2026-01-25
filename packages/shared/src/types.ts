@@ -7,6 +7,7 @@ export interface SwimEvent {
 	heatNumber: number;
 	lane: number;
 	swimmerName: string;
+	age?: number; // Swimmer's age (e.g., 11)
 	team?: string;
 	seedTime?: string; // e.g., "1:05.32" or "NT"
 	heatStartTime?: string; // "HH:MM" 24-hour format

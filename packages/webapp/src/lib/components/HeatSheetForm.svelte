@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { uploadedPdf, appState, extractionResult, swimmerName } from '$lib/stores/extraction';
+	import { uploadedPdf, appState, extractionResult, swimmerName, selectAllEvents } from '$lib/stores/extraction';
 	import type { UploadedPdf, ExtractResponse, ExtractErrorResponse } from '$lib/types';
 
 	let isDragOver = $state(false);
@@ -186,6 +186,7 @@
 
 			extractionStatus = `Found ${result.data.events.length} events!`;
 			extractionResult.set(result.data);
+			selectAllEvents(result.data.events.length);
 			appState.set('search');
 		} catch (error) {
 			console.error('Extraction failed:', error);

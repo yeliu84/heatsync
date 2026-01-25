@@ -9,12 +9,13 @@ Core features required for initial launch.
 | PDF Upload | Drag-drop or file picker, swimmer name input | Complete |
 | AI Extraction | Upload PDF + swimmer name, AI extracts only that swimmer's events (swimmer-first) | Complete |
 | Swimmer Search | Server-side at extraction time (not client-side post-extraction) | Complete |
-| Event Display | Show event name, heat, lane, seed time for matched swimmer | Complete |
-| Event Selection | Checkboxes to select which events to export | Pending |
+| Event Display | Show event name, heat, lane, seed time; swimmer shown as "Name (Team, Age)" | Complete |
+| Event Selection | Checkboxes with Select All/None toggle, auto-select on extraction | Complete |
 | Reminder Choice | Radio buttons: 5, 10 (default), 15 min before | Pending |
 | .ics Export | Download .ics file with selected events | Pending |
 | Loading States | Progress indicators during extraction, status in button | Complete |
 | Form State Management | Disable form after processing, "Start Over" to reset | Complete |
+| Swimmer Disambiguation | Combobox to select swimmer when same name has different team/age | Complete |
 | Error Handling | Clear messages for failed uploads/extraction | Partial |
 | Mobile Responsive | Works on phones (parents at meets) | Pending |
 
@@ -69,6 +70,7 @@ The extraction system has been optimized to handle real-world heat sheets accura
 | Challenge | Solution |
 |-----------|----------|
 | Multiple swimmers with same last name | Explicit disambiguation in prompt (e.g., "Liu, Elsa" ≠ "Liu, Elly") |
+| Same name, different team/age | Disambiguation combobox lets user select their swimmer profile |
 | Name format variations | Input normalization handles both "First Last" and "Last, First" |
 | Incomplete scanning | Thoroughness instructions + final verification step |
 | Model non-determinism | temperature=0 for consistent results |

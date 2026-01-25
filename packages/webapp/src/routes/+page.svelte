@@ -26,20 +26,14 @@
 
 	<!-- Steps 2-4: Only show when events are found -->
 	{#if $extractionResult && $extractionResult.events.length > 0}
-		<!-- Step 2: Search -->
+		<!-- Step 2: Swimmer Disambiguation (only shows when needed) -->
 		<section>
-			<SwimmerSearch disabled={$appState === 'extracting'} />
+			<SwimmerSearch />
 		</section>
 
 		<!-- Step 3: Event List -->
 		<section>
-			{#if $appState === 'extracting'}
-				<EventList />
-			{:else if $appState === 'search' || $appState === 'export'}
-				<EventList showPlaceholder />
-			{:else}
-				<EventList showPlaceholder />
-			{/if}
+			<EventList />
 		</section>
 
 		<!-- Step 4: Export -->

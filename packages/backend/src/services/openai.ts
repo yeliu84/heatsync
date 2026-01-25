@@ -44,7 +44,7 @@ const buildExtractionPrompt = (swimmerName: string): string => {
   return `IMPORTANT: You MUST scan EVERY page of this heat sheet completely. Do NOT stop after finding some events - swimmers often appear in multiple events across different pages.
 
 Find ALL events for swimmer "${firstLast}" in this heat sheet. Return ONLY this JSON (no explanation):
-{"meetName":"string","sessionDate":"YYYY-MM-DD","meetDateRange":{"start":"YYYY-MM-DD","end":"YYYY-MM-DD"},"venue":"string|null","events":[{"eventNumber":1,"eventName":"string","heatNumber":1,"lane":1,"swimmerName":"First Last","team":"ABC","seedTime":"1:23.45","heatStartTime":"HH:MM"}],"warnings":[]}
+{"meetName":"string","sessionDate":"YYYY-MM-DD","meetDateRange":{"start":"YYYY-MM-DD","end":"YYYY-MM-DD"},"venue":"string|null","events":[{"eventNumber":1,"eventName":"string","heatNumber":1,"lane":1,"swimmerName":"First Last","age":11,"team":"ABC","seedTime":"1:23.45","heatStartTime":"HH:MM"}],"warnings":[]}
 
 NAME MATCHING (CRITICAL):
 - The swimmer's name is: "${firstLast}" (also written as "${lastFirst}")
@@ -53,6 +53,12 @@ NAME MATCHING (CRITICAL):
 - IMPORTANT: There may be MULTIPLE swimmers with the same LAST NAME (e.g., multiple "Liu" swimmers)
 - You MUST match BOTH the first name AND last name EXACTLY - "${lastFirst}" only, not similar names
 - Do NOT include events for swimmers with similar names (e.g., "Liu, Elsa" is NOT "Liu, Elly" - different first names)
+
+AGE EXTRACTION:
+- Extract the swimmer's age from the age column (the number next to the swimmer name, e.g., 8, 10, 11)
+- Return age as a number (not string)
+- Heat sheets typically show age in a column near the swimmer's name and team
+- If age cannot be determined, omit the age field
 
 CRITICAL RULES:
 - Scan ALL pages from start to finish before returning results
@@ -128,6 +134,7 @@ const parseExtractionResponse = (responseText: string): ExtractionResult => {
       heatNumber: Number(event.heatNumber) || 0,
       lane: Number(event.lane) || 0,
       swimmerName: String(event.swimmerName || "Unknown"),
+      age: event.age ? Number(event.age) : undefined,
       team: event.team ? String(event.team) : undefined,
       seedTime: event.seedTime ? String(event.seedTime) : undefined,
       heatStartTime: event.heatStartTime ? String(event.heatStartTime) : undefined,

@@ -7,7 +7,8 @@
 | 1. Project Setup & Core UI                  | Complete    | 2026-01-24 |
 | 2. PDF Processing + AI Extraction (Backend) | Complete    | 2026-01-24 |
 | 2.5 Upload Form Fix                         | Complete    | 2026-01-25 |
-| 3. Search & Display                         | Not Started | -          |
+| 3. Swimmer Disambiguation                   | Complete    | 2026-01-25 |
+| 3.5 UI Polish: Event Display & Selection    | Complete    | 2026-01-25 |
 | 4. Calendar Export                          | Not Started | -          |
 | 5. Polish & Launch                          | Not Started | -          |
 
@@ -156,26 +157,48 @@ Complete upload form with swimmer name, URL paste, and file upload options
 
 ---
 
-## Milestone 3: Search & Display
+## Milestone 3: Swimmer Disambiguation
 
-**Goal:** User can find their swimmer's events
+**Goal:** Handle cases where extraction returns events for multiple swimmers with same name but different team/age
 
-**Status:** Not Started
+**Status:** Complete
 
 ### Tasks
 
-- [ ] Implement swimmer name search input in case there are same names but different team and/or age
-- [ ] Add fuzzy matching for name search (handle typos, partial names)
-- [ ] Display filtered events in EventCard components
-- [ ] Show event details: event number, name, heat, lane, heat start time, seed time
-- [ ] Sort events by event number
-- [ ] Add "no results found" state with suggestions
-- [ ] Add "searching..." loading state
-- [ ] Highlight search matches in results
+- [x] Add `age` field to `SwimEvent` type
+- [x] Update AI extraction prompt to extract swimmer age
+- [x] Add `SwimmerProfile` interface for disambiguation
+- [x] Create `swimmerProfiles` derived store (unique name+team+age combinations)
+- [x] Create `needsDisambiguation` derived store
+- [x] Create `selectedProfile` writable store
+- [x] Update `filteredEvents` to respect selected profile
+- [x] Replace SwimmerSearch text input with disambiguation combobox
+- [x] Auto-select first profile when disambiguation needed
+- [x] Update spec documentation
 
 ### Deliverable
 
-Full flow from upload → search → see events
+When same name appears with different team/age → combobox to select correct swimmer
+
+---
+
+## Milestone 3.5: UI Polish - Event Display & Selection
+
+**Goal:** Improve event card layout and add selection controls
+
+**Status:** Complete
+
+### Tasks
+
+- [x] Update EventCard layout to show "Name (Team, Age)" format
+- [x] Add `selectAllEvents` function to extraction store
+- [x] Auto-select all events after extraction completes
+- [x] Add "Select All / Select None" toggle button to EventList header
+- [x] Show selected count in header: "3 events found (3 selected)"
+
+### Deliverable
+
+Cleaner event card layout with convenient selection controls
 
 ---
 
@@ -187,8 +210,8 @@ Full flow from upload → search → see events
 
 ### Tasks
 
-- [ ] Build event selection UI (checkboxes per event)
-- [ ] Add "Select All" / "Deselect All" buttons
+- [x] Build event selection UI (checkboxes per event)
+- [x] Add "Select All" / "Deselect All" buttons
 - [ ] Implement reminder time selector (5/10/15 min radio buttons)
 - [ ] Create `/api/calendar/+server.ts` route
 - [ ] Generate valid iCalendar (.ics) format
@@ -279,3 +302,5 @@ PUBLIC_API_URL=http://localhost:3001
 | 2026-01-25 | 2         | Architecture update: Swimmer-first extraction - API now requires swimmer name, GPT models use direct PDF upload via Files API, non-GPT models use PDF→image rendering                                                                                                      |
 | 2026-01-25 | 2         | Prompt accuracy improvements: Name normalization (handles "First Last" and "Last, First" input), disambiguation for swimmers with same last name, thoroughness instructions, session date calculation, heat start time extraction, temperature=0 for deterministic results |
 | 2026-01-25 | 2.5       | Upload form fix - Added swimmer name input (required), URL paste option, renamed PdfUploader to HeatSheetForm |
+| 2026-01-25 | 3         | Swimmer disambiguation - Added age extraction, SwimmerProfile stores, disambiguation combobox when multiple swimmers with same name |
+| 2026-01-25 | 3.5       | UI Polish - Event card shows "Name (Team, Age)" format, auto-select all on extraction, Select All/None toggle button |

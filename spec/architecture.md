@@ -132,9 +132,18 @@ interface SwimEvent {
   heatNumber: number;
   lane: number;
   swimmerName: string;
+  age?: number;               // Swimmer's age (e.g., 11)
   team?: string;
   seedTime?: string;          // e.g., "1:05.32" or "NT"
   heatStartTime?: string;     // "HH:MM" 24-hour format
+}
+
+// Unique swimmer profile for disambiguation
+interface SwimmerProfile {
+  swimmerName: string;
+  team?: string;
+  age?: number;
+  key: string;                // Unique identifier: "name|team|age"
 }
 
 interface ExtractionResult {
@@ -235,6 +244,39 @@ The application uses a simple state machine stored in `appState`:
 - **Result sections:** Only appear when `extractionResult` contains events (not just when state changes)
 - **Start Over:** Resets all stores to initial state via `resetStores()`, returns to `upload` state
 
+### Swimmer Disambiguation
+
+When the AI extraction returns events for multiple swimmers with the same name but different team and/or age combinations, the app shows a disambiguation combobox.
+
+**Flow:**
+1. User searches for "John Smith"
+2. AI returns events for multiple "John Smith" swimmers (e.g., from different teams or ages)
+3. App detects multiple unique `(name, team, age)` profiles in `swimmerProfiles` store
+4. `needsDisambiguation` becomes true → disambiguation combobox appears
+5. User selects their swimmer → `selectedProfile` updates → `filteredEvents` filters to that profile
+6. If only one unique profile exists → no combobox shown, events displayed directly
+
+**Stores:**
+- `swimmerProfiles`: Derived store of unique `SwimmerProfile` objects from extraction result
+- `needsDisambiguation`: Derived boolean (true if multiple profiles)
+- `selectedProfile`: Writable store for the user's selection
+- `profileFilteredEvents`: Events filtered by selected profile
+- `filteredEvents`: Events filtered by profile + search query
+
+### Event Display & Selection
+
+**Event Card Layout:**
+Each event card displays swimmer info in the format: `Name (Team, Age)`
+- Name in medium weight
+- Team and age in smaller, lighter text inside parentheses
+- Comma separator only when both team and age are present
+
+**Selection Behavior:**
+- All events are auto-selected when extraction completes (`selectAllEvents`)
+- Header shows event count and selected count: "3 events found (3 selected)"
+- "Select All / Select None" toggle button in the event list header
+- Individual event cards have checkbox toggles
+
 ## AI API Integration
 
 ### Configuration
@@ -292,6 +334,7 @@ The extraction prompt has been optimized for accuracy with faster models (e.g., 
 |-------------|---------|
 | **Name Normalization** | Converts input to both "First Last" and "Last, First" formats for reliable matching |
 | **Disambiguation** | Explicit warning that multiple swimmers may share last names (e.g., "Liu, Elsa" vs "Liu, Elly") |
+| **Age Extraction** | Extracts swimmer age from heat sheet for disambiguation when multiple swimmers share the same name |
 | **Thoroughness** | Instructions to scan ALL pages before returning, prevents early termination |
 | **Session Date Calculation** | Derives session date from meet date range + weekday indicator |
 | **Heat Start Time** | Extracts explicit times or estimates from previous heat times |

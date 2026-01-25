@@ -3,7 +3,8 @@
 		filteredEvents,
 		extractionResult,
 		selectedEventIds,
-		toggleEventSelection
+		toggleEventSelection,
+		clearSelections
 	} from '$lib/stores/extraction';
 	import EventCard from './EventCard.svelte';
 
@@ -12,6 +13,20 @@
 	}
 
 	let { showPlaceholder = false }: Props = $props();
+
+	const selectAll = () => {
+		const indices = $filteredEvents.map((_, i) => i);
+		indices.forEach((i) => {
+			if (!$selectedEventIds.has(i)) {
+				toggleEventSelection(i);
+			}
+		});
+	};
+
+	const isAllSelected = (): boolean => {
+		if ($filteredEvents.length === 0) return false;
+		return $filteredEvents.every((_, i) => $selectedEventIds.has(i));
+	};
 </script>
 
 {#if showPlaceholder}
@@ -60,6 +75,13 @@
 					<span class="ml-2 text-sky-500">({$selectedEventIds.size} selected)</span>
 				{/if}
 			</p>
+			<button
+				type="button"
+				onclick={() => (isAllSelected() ? clearSelections() : selectAll())}
+				class="text-sm text-sky-500 hover:text-sky-600 hover:underline"
+			>
+				{isAllSelected() ? 'Select None' : 'Select All'}
+			</button>
 		</div>
 		<div class="space-y-3">
 			{#each $filteredEvents as event, index (event.eventNumber + '-' + event.heatNumber + '-' + event.lane)}

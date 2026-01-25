@@ -48,11 +48,13 @@
 					{/if}
 				</span>
 			</div>
-			<h3 class="mt-2 font-medium text-sky-900">{event.swimmerName}</h3>
+			<h3 class="mt-2 font-medium text-sky-900">
+				{event.swimmerName}
+				{#if event.team || event.age}
+					<span class="text-sm font-normal text-sky-400">({#if event.team}{event.team}{/if}{#if event.team && event.age},&nbsp;{/if}{#if event.age}{event.age}{/if})</span>
+				{/if}
+			</h3>
 			<p class="text-sm text-sky-600">{event.eventName}</p>
-			{#if event.team}
-				<p class="mt-1 text-xs text-sky-400">{event.team}</p>
-			{/if}
 		</div>
 		<div class="flex flex-col items-end gap-2">
 			<div
