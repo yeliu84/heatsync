@@ -1,0 +1,5 @@
+{
+  "name": "heatsync",
+  "private": true,
+  "workspaces": ["packages/*"]
+}
