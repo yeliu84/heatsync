@@ -31,3 +31,13 @@ export interface PdfRenderResult {
 	images: string[]; // base64 data URLs
 	pageCount: number;
 }
+
+/**
+ * Options for AI extraction
+ */
+export interface ExtractionOptions {
+	/** Image detail level for OpenAI Vision API (default: "low") */
+	detail?: "low" | "high";
+	/** Number of pages per batch for parallel API calls (default: 5) */
+	batchSize?: number;
+}

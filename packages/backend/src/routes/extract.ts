@@ -47,9 +47,12 @@ extractRoutes.post("/", async (c) => {
     const { images, pageCount } = await renderPdfToImages(buffer);
     console.log(`Rendered ${images.length} pages`);
 
-    // Extract data using AI
+    // Extract data using AI with optimized settings
     console.log("Extracting data with AI...");
-    const extractionResult = await extractFromImages(images);
+    const extractionResult = await extractFromImages(images, {
+      detail: "low",
+      batchSize: 5,
+    });
     console.log(
       `Extracted ${extractionResult.events.length} events from ${extractionResult.meetName}`,
     );

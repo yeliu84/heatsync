@@ -24,24 +24,28 @@ export const renderPdfToImages = async (
 	const pageCount = doc.countPages();
 	const pagesToRender = maxPages ? Math.min(pageCount, maxPages) : pageCount;
 
-	const images: string[] = [];
+	// Create array of page indices for parallel processing
+	const pageIndices = Array.from({ length: pagesToRender }, (_, i) => i);
 
-	for (let i = 0; i < pagesToRender; i++) {
-		const page = doc.loadPage(i);
+	// Render all pages in parallel
+	const images = await Promise.all(
+		pageIndices.map(async (i) => {
+			const page = doc.loadPage(i);
 
-		// Create transformation matrix with scale
-		const matrix = mupdf.Matrix.scale(scale, scale);
+			// Create transformation matrix with scale
+			const matrix = mupdf.Matrix.scale(scale, scale);
 
-		// Render page to pixmap (RGBA)
-		const pixmap = page.toPixmap(matrix, mupdf.ColorSpace.DeviceRGB);
+			// Render page to pixmap (RGB)
+			const pixmap = page.toPixmap(matrix, mupdf.ColorSpace.DeviceRGB);
 
-		// Convert to PNG buffer
-		const pngBuffer = pixmap.asPNG();
+			// Convert to PNG buffer
+			const pngBuffer = pixmap.asPNG();
 
-		// Convert to base64 data URL
-		const base64 = Buffer.from(pngBuffer).toString("base64");
-		images.push(`data:image/png;base64,${base64}`);
-	}
+			// Convert to base64 data URL
+			const base64 = Buffer.from(pngBuffer).toString("base64");
+			return `data:image/png;base64,${base64}`;
+		})
+	);
 
 	return {
 		images,
