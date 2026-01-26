@@ -7,6 +7,8 @@
 		clearSelections
 	} from '$lib/stores/extraction';
 	import EventCard from './EventCard.svelte';
+	import EventCardSkeleton from './EventCardSkeleton.svelte';
+	import { fade } from 'svelte/transition';
 
 	interface Props {
 		showPlaceholder?: boolean;
@@ -39,17 +41,24 @@
 			<div>
 				<p class="text-2xl font-medium text-sky-900">Your Events Will Appear Here</p>
 				<p class="mt-1 text-base text-sky-600">
-					Upload a heat sheet PDF and click "Find My Events" to get started
+					Upload a heat sheet PDF and click "Find Events" to get started
 				</p>
 			</div>
 		</div>
 	</div>
 {:else if !$extractionResult}
-	<!-- Loading/extracting state -->
-	<div class="rounded-xl border border-sky-200 bg-white p-8 text-center">
-		<div class="flex flex-col items-center gap-3">
-			<div class="h-8 w-8 animate-spin rounded-full border-4 border-sky-200 border-t-sky-500"></div>
-			<p class="text-sky-600">Processing your heat sheet...</p>
+	<!-- Loading/extracting state with skeleton loaders -->
+	<div class="space-y-4">
+		<div class="flex items-center justify-between">
+			<div class="flex items-center gap-2">
+				<div class="h-4 w-4 animate-spin rounded-full border-2 border-sky-200 border-t-sky-500"></div>
+				<p class="text-sm text-sky-600">Processing your heat sheet...</p>
+			</div>
+		</div>
+		<div class="space-y-3">
+			{#each Array(4) as _, i}
+				<EventCardSkeleton />
+			{/each}
 		</div>
 	</div>
 {:else if $filteredEvents.length === 0}
@@ -67,7 +76,7 @@
 	</div>
 {:else}
 	<!-- Event list -->
-	<div class="space-y-4">
+	<div class="space-y-4" in:fade={{ duration: 200 }}>
 		<div class="flex items-center justify-between">
 			<p class="text-sm text-sky-600">
 				{$filteredEvents.length} event{$filteredEvents.length === 1 ? '' : 's'} found
@@ -85,11 +94,13 @@
 		</div>
 		<div class="space-y-3">
 			{#each $filteredEvents as event, index (event.eventNumber + '-' + event.heatNumber + '-' + event.lane)}
-				<EventCard
-					{event}
-					selected={$selectedEventIds.has(index)}
-					onToggle={() => toggleEventSelection(index)}
-				/>
+				<div in:fade={{ duration: 150, delay: index * 30 }}>
+					<EventCard
+						{event}
+						selected={$selectedEventIds.has(index)}
+						onToggle={() => toggleEventSelection(index)}
+					/>
+				</div>
 			{/each}
 		</div>
 	</div>

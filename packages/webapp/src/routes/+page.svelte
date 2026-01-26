@@ -11,14 +11,49 @@
 </script>
 
 <!-- Hero Header -->
-<header class="pt-12 text-center">
-	<h1 class="text-5xl font-bold tracking-tight text-sky-900">HeatSync</h1>
-	<p class="mt-3 text-xl text-sky-600">Heat Sheet → Calendar</p>
-	<p class="mt-2 text-sm text-sky-400">Never miss a race again</p>
+<header class="pt-8 text-center sm:pt-12">
+	<h1 class="text-3xl font-bold tracking-tight text-sky-900 sm:text-5xl">HeatSync</h1>
+	<p class="mt-2 text-lg text-sky-600 sm:mt-3 sm:text-xl">Heat Sheet → Calendar</p>
+	<p class="mt-1 text-xs text-sky-400 sm:mt-2 sm:text-sm">Never miss a race again</p>
 </header>
 
+<!-- Progress indicator -->
+{#if $appState === 'extracting' || $extractionResult}
+	<div class="mt-8 flex items-center justify-center gap-2">
+		{#each [1, 2, 3] as step}
+			{@const currentStep = $appState === 'extracting' ? 1 : ($extractionResult ? 2 : 0)}
+			{@const isActive = step <= currentStep + 1}
+			{@const isComplete = step <= currentStep}
+			<div class="flex items-center gap-2">
+				<div
+					class="flex h-8 w-8 items-center justify-center rounded-full text-sm font-medium transition-colors
+						{isComplete ? 'bg-sky-500 text-white' : isActive ? 'border-2 border-sky-500 text-sky-500' : 'border-2 border-sky-200 text-sky-300'}"
+				>
+					{#if isComplete}
+						<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+						</svg>
+					{:else}
+						{step}
+					{/if}
+				</div>
+				{#if step < 3}
+					<div class="h-0.5 w-8 transition-colors {isComplete ? 'bg-sky-500' : 'bg-sky-200'}"></div>
+				{/if}
+			</div>
+		{/each}
+	</div>
+	<div class="mt-2 text-center text-xs text-sky-400">
+		{#if $appState === 'extracting'}
+			Step 1: Extracting events...
+		{:else if $extractionResult}
+			Step 2: Select your events
+		{/if}
+	</div>
+{/if}
+
 <!-- Main content -->
-<div class="mt-16 space-y-12">
+<div class="mt-8 space-y-12 sm:mt-16">
 	<!-- Step 1: Heat Sheet Form -->
 	<section>
 		<HeatSheetForm />

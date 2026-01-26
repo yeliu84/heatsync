@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { uploadedPdf, appState, extractionResult, swimmerName, selectAllEvents } from '$lib/stores/extraction';
+	import { toasts } from '$lib/stores/toast';
 	import type { UploadedPdf, ExtractResponse, ExtractErrorResponse } from '$lib/types';
 
 	let isDragOver = $state(false);
@@ -12,11 +13,7 @@
 	const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 	const API_URL = '/api';
 
-	// Form is valid when swimmer name is provided and either URL or file is provided
-	const isFormValid = $derived(
-		localSwimmerName.trim().length > 0 && (pdfUrl.trim().length > 0 || $uploadedPdf !== null)
-	);
-
+	// Validation functions (defined first for use in derived states)
 	const validateFile = (file: File): string | null => {
 		if (file.type !== 'application/pdf') {
 			return 'Please upload a PDF file';
@@ -39,6 +36,25 @@
 			return 'Please enter a valid URL';
 		}
 	};
+
+	// Validates swimmer name format: "FirstName LastName" or "LastName, FirstName"
+	const validateSwimmerName = (name: string): boolean => {
+		const trimmed = name.trim();
+		if (!trimmed) return false;
+		// Pattern 1: FirstName LastName (e.g., "John Smith")
+		// Pattern 2: LastName, FirstName (e.g., "Smith, John")
+		const firstLastPattern = /^\S+\s+\S+.*$/; // At least two words separated by space
+		const lastFirstPattern = /^\S+,\s*\S+.*$/; // Word, comma, optional space, word
+		return firstLastPattern.test(trimmed) || lastFirstPattern.test(trimmed);
+	};
+
+	// Validation states for real-time feedback
+	const swimmerNameValid = $derived(validateSwimmerName(localSwimmerName));
+	const urlValid = $derived(pdfUrl.trim().length === 0 || validateUrl(pdfUrl) === null);
+	const hasHeatSheet = $derived(pdfUrl.trim().length > 0 || $uploadedPdf !== null);
+
+	// Form is valid when swimmer name is provided and either URL or file is provided
+	const isFormValid = $derived(swimmerNameValid && hasHeatSheet && urlValid);
 
 	const handleFile = (file: File) => {
 		const error = validateFile(file);
@@ -190,7 +206,8 @@
 			appState.set('search');
 		} catch (error) {
 			console.error('Extraction failed:', error);
-			errorMessage = error instanceof Error ? error.message : 'Extraction failed';
+			const message = error instanceof Error ? error.message : 'Extraction failed';
+			toasts.error(message);
 			extractionStatus = '';
 			appState.set('upload');
 		}
@@ -203,14 +220,26 @@
 		<label for="swimmer-name" class="block text-sm font-medium text-sky-800">
 			Swimmer <span class="text-red-500">*</span>
 		</label>
-		<input
-			id="swimmer-name"
-			type="text"
-			bind:value={localSwimmerName}
-			placeholder="Enter swimmer's name (e.g., John Smith)"
-			disabled={$appState === 'extracting' || $appState === 'search'}
-			class="w-full rounded-lg border border-sky-200 bg-white px-4 py-3 text-sky-900 placeholder-sky-400 transition-colors focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200 disabled:cursor-not-allowed disabled:opacity-50"
-		/>
+		<div class="relative">
+			<input
+				id="swimmer-name"
+				type="text"
+				bind:value={localSwimmerName}
+				placeholder="Enter swimmer's name (e.g., John Smith)"
+				disabled={$appState === 'extracting' || $appState === 'search'}
+				class="w-full rounded-lg border bg-white px-4 py-3 pr-10 text-sky-900 placeholder-sky-400 transition-colors focus:outline-none focus:ring-2 disabled:cursor-not-allowed disabled:opacity-50
+					{swimmerNameValid ? 'border-green-300 focus:border-green-500 focus:ring-green-200' : 'border-sky-200 focus:border-sky-500 focus:ring-sky-200'}"
+			/>
+			{#if localSwimmerName.length > 0}
+				<div class="absolute right-3 top-1/2 -translate-y-1/2">
+					{#if swimmerNameValid}
+						<svg class="h-5 w-5 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+						</svg>
+					{/if}
+				</div>
+			{/if}
+		</div>
 	</div>
 
 	<!-- Heat Sheet (URL or Upload) -->
@@ -218,20 +247,36 @@
 		<span class="block text-sm font-medium text-sky-800">Heat Sheet <span class="text-red-500">*</span></span>
 		<div class="space-y-4 rounded-lg border border-sky-100 bg-sky-50/50 p-4">
 			<!-- URL input -->
-			<div class="relative flex gap-2">
-				<input
-					id="pdf-url"
-					type="url"
-					bind:value={pdfUrl}
-					placeholder="Enter URL to PDF e.g. https://example.com/heatsheet.pdf"
-					disabled={$appState === 'extracting' || $appState === 'search'}
-					class="flex-1 rounded-lg border border-sky-200 bg-white px-4 py-3 text-sky-900 placeholder-sky-400 transition-colors focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200 disabled:cursor-not-allowed disabled:opacity-50"
-				/>
+			<div class="flex flex-col gap-2 sm:flex-row">
+				<div class="relative flex-1">
+					<input
+						id="pdf-url"
+						type="url"
+						bind:value={pdfUrl}
+						placeholder="Enter URL to PDF"
+						disabled={$appState === 'extracting' || $appState === 'search'}
+						class="w-full rounded-lg border bg-white px-4 py-3 pr-10 text-sky-900 placeholder-sky-400 transition-colors focus:outline-none focus:ring-2 disabled:cursor-not-allowed disabled:opacity-50
+							{pdfUrl.trim().length > 0 ? (urlValid ? 'border-green-300 focus:border-green-500 focus:ring-green-200' : 'border-red-300 focus:border-red-500 focus:ring-red-200') : 'border-sky-200 focus:border-sky-500 focus:ring-sky-200'}"
+					/>
+					{#if pdfUrl.trim().length > 0}
+						<div class="absolute right-3 top-1/2 -translate-y-1/2">
+							{#if urlValid}
+								<svg class="h-5 w-5 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+									<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+								</svg>
+							{:else}
+								<svg class="h-5 w-5 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+									<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+								</svg>
+							{/if}
+						</div>
+					{/if}
+				</div>
 				<button
 					type="button"
 					onclick={pasteFromClipboard}
 					disabled={$appState === 'extracting' || $appState === 'search'}
-					class="flex items-center justify-center rounded-lg border border-sky-200 bg-white px-3 text-sky-600 transition-colors hover:bg-sky-50 hover:text-sky-700 disabled:cursor-not-allowed disabled:opacity-50"
+					class="flex items-center justify-center gap-2 rounded-lg border border-sky-200 bg-white px-3 py-3 text-sky-600 transition-colors hover:bg-sky-50 hover:text-sky-700 disabled:cursor-not-allowed disabled:opacity-50 sm:py-0"
 					title="Paste from clipboard"
 					aria-label="Paste URL from clipboard"
 				>
@@ -243,6 +288,7 @@
 							d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"
 						/>
 					</svg>
+					<span class="sm:hidden">Paste URL</span>
 				</button>
 			</div>
 
@@ -368,7 +414,7 @@
 		{:else if $appState === 'search' && extractionStatus}
 			{extractionStatus}
 		{:else}
-			🔍 Find My Events
+			🔍 Find Events
 		{/if}
 	</button>
 </div>

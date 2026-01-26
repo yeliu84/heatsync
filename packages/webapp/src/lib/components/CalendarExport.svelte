@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { selectedEvents, extractionResult } from '$lib/stores/extraction';
 	import { generateCalendarEvents, downloadIcsFile } from '$lib/utils/calendar';
+	import { toasts } from '$lib/stores/toast';
 
 	interface Props {
 		disabled?: boolean;
@@ -9,13 +10,10 @@
 	let { disabled = false }: Props = $props();
 
 	let reminderMinutes = $state<5 | 10 | 15>(10);
-	let exportStatus = $state<'idle' | 'success' | 'error'>('idle');
-	let statusMessage = $state('');
 
 	const handleExport = () => {
 		if (!$extractionResult) {
-			exportStatus = 'error';
-			statusMessage = 'No extraction data available';
+			toasts.error('No extraction data available');
 			return;
 		}
 
@@ -26,27 +24,25 @@
 		});
 
 		if (!result.success) {
-			exportStatus = 'error';
-			statusMessage = result.error || 'Export failed';
+			toasts.error(result.error || 'Export failed');
 			return;
 		}
 
 		downloadIcsFile(result.icsContent!, result.filename!);
 
-		exportStatus = 'success';
-		statusMessage =
-			result.skippedCount > 0
-				? `Downloaded! ${result.skippedCount} event(s) skipped (no start time)`
-				: 'Calendar file downloaded!';
-
-		setTimeout(() => {
-			exportStatus = 'idle';
-		}, 5000);
+		if (result.skippedCount > 0) {
+			toasts.warning(`Downloaded! ${result.skippedCount} event(s) skipped (no start time)`);
+		} else {
+			toasts.success('Calendar file downloaded!');
+		}
 	};
 </script>
 
 <div class="rounded-xl border border-sky-200 bg-white p-6">
 	<h2 class="text-xl font-medium text-sky-900">Export to Calendar</h2>
+	<div class="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
+		<p><strong>Note:</strong> Events are found by AI and may contain errors. Please verify event details before adding to your calendar.</p>
+	</div>
 
 	{#if disabled}
 		<div class="mt-4">
@@ -92,16 +88,6 @@
 			>
 				Download .ics File
 			</button>
-
-			{#if exportStatus !== 'idle'}
-				<div
-					class="rounded-lg p-3 text-sm {exportStatus === 'success'
-						? 'bg-green-50 text-green-700'
-						: 'bg-red-50 text-red-700'}"
-				>
-					{statusMessage}
-				</div>
-			{/if}
 
 			<p class="text-center text-xs text-sky-400">
 				Works with Apple Calendar, Google Calendar, Outlook, and more
