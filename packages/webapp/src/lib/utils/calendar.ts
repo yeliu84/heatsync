@@ -30,6 +30,11 @@ const dateToArray = (date: Date): DateArray => [
 /**
  * Combine a session date with a "HH:MM" time string to create a full Date
  * Returns null if the time string is invalid
+ *
+ * Note: sessionDate is typically a UTC timestamp (e.g., "2026-01-18T00:00:00Z").
+ * We extract the date components using UTC methods to preserve the intended date,
+ * then combine with the local time. This prevents timezone shifts where
+ * "Jan 18 midnight UTC" becomes "Jan 17 4pm Pacific".
  */
 const combineDateTime = (sessionDate: Date, heatStartTime: string): Date | null => {
 	const match = heatStartTime.match(/^(\d{1,2}):(\d{2})$/);
@@ -40,9 +45,17 @@ const combineDateTime = (sessionDate: Date, heatStartTime: string): Date | null 
 
 	if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return null;
 
-	const combined = new Date(sessionDate);
-	combined.setHours(hours, minutes, 0, 0);
-	return combined;
+	// Parse sessionDate - handle both Date objects and ISO strings
+	const dateObj = new Date(sessionDate);
+
+	// Extract date components in UTC to avoid timezone shift
+	const year = dateObj.getUTCFullYear();
+	const month = dateObj.getUTCMonth();
+	const day = dateObj.getUTCDate();
+
+	// Create a new Date with UTC date components + local time
+	// This ensures "Jan 18" stays "Jan 18" regardless of local timezone
+	return new Date(year, month, day, hours, minutes, 0, 0);
 };
 
 /**
