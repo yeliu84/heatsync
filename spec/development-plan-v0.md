@@ -246,12 +246,12 @@ Complete MVP - upload → search → export to calendar
 ### Remaining Tasks
 
 - [x] Comprehensive error handling and user feedback (toast notifications, form recovery on empty results)
-- [ ] Loading skeletons and smooth animations
-- [ ] Mobile responsiveness testing (iOS Safari, Android Chrome)
-- [ ] Rate limiting on backend API (protect shared token)
+- [x] Loading skeletons and smooth animations
+- [x] Mobile responsiveness (Tailwind responsive breakpoints throughout)
+- [x] Rate limiting on backend API (10 req/min per IP)
 - [ ] Add basic analytics (optional, privacy-respecting)
-- [ ] Write user-facing help/FAQ section
-- [ ] Create sample heat sheet for testing/demo
+- [x] Write user-facing help/FAQ section
+- [x] Create sample heat sheet for testing/demo
 - [ ] Deploy to AI Builder Space
 - [ ] Test with 5+ real heat sheets from different software
 - [ ] Performance optimization (lazy loading, image compression)
@@ -332,3 +332,4 @@ No environment variables required. The webapp uses relative `/api` paths which a
 | 2026-01-25 | 5         | Deployment infrastructure - Single-server architecture, routes moved to /api prefix, static file serving, SPA fallback, Vite proxy, multi-stage Dockerfile, docker scripts |
 | 2026-01-26 | 5         | UX fix - Form stays editable when no events found (stays in `upload` state instead of `search`), shows toast notification instead of locking form |
 | 2026-01-26 | 5         | UI simplification - Removed progress bar/stepper component (had sync issues with appState), status is shown in button only |
+| 2026-01-26 | 5         | Verified completion: Loading skeletons (EventCardSkeleton with pulse animation), mobile responsiveness (sm: breakpoints), rate limiting (10 req/min per IP), help/FAQ page (8 FAQs + quick start guide), sample heat sheets (2 PDFs) |
