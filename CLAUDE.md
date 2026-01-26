@@ -6,25 +6,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 HeatSync is an application that converts swim meet heat sheets into calendar events. The goal is to eliminate the manual process of printing heat sheets, highlighting events, and manually adding them to calendars. Users can find their events and sync them directly to their calendar.
 
-## Current State
+**Production URL:** https://heatsync.ai-builders.space/
 
-This is a new project in early development. The repository currently contains:
+## Git Workflow
 
-- `openapi.json`: OpenAPI 3.1.0 specification for an AI Builder backend API (potential integration point)
-- `spec/`: Directory for specifications (currently empty)
-
-## API Integration
-
-The `openapi.json` defines an AI Builder Space Backend with endpoints for:
-
-- Chat completions (multi-model orchestrator with web search capabilities)
-- Embeddings generation
-- Audio transcription
-- Web search (Tavily)
-- Image generation/editing
-- Deployment management
-
-Authentication uses Bearer tokens. Base URL: `/backend`
+- **Never commit directly to main** - the app is running in production
+- Always create a feature branch and open a PR for changes
+- Branch naming: `feature/<description>` or `fix/<description>`
 
 ## Code Style Guide
 

@@ -8,6 +8,11 @@
   } from '$lib/stores/extraction';
   import { toasts } from '$lib/stores/toast';
   import type { UploadedPdf, ExtractResponse, ExtractErrorResponse } from '$lib/types';
+  import {
+    trackExtractionStarted,
+    trackExtractionSuccess,
+    trackExtractionFailed,
+  } from '$lib/utils/analytics';
 
   let isDragOver = $state(false);
   let fileInput = $state<HTMLInputElement | null>(null);
@@ -182,6 +187,10 @@
     appState.set('extracting');
     errorMessage = '';
 
+    // Track extraction start with method type
+    const method = pdf ? 'pdf' : 'url';
+    trackExtractionStarted(method);
+
     try {
       let response: Response;
 
@@ -222,8 +231,10 @@
       if (result.data.events.length > 0) {
         extractionStatus = `Found ${result.data.events.length} events!`;
         selectAllEvents(result.data.events.length);
+        trackExtractionSuccess(result.data.events.length);
         appState.set('search');
       } else {
+        trackExtractionSuccess(0);
         toasts.info(`No events found for "${localSwimmerName.trim()}"`);
         extractionStatus = '';
         appState.set('upload');
@@ -231,6 +242,7 @@
     } catch (error) {
       console.error('Extraction failed:', error);
       const message = error instanceof Error ? error.message : 'Extraction failed';
+      trackExtractionFailed(message);
       toasts.error(message);
       extractionStatus = '';
       appState.set('upload');
