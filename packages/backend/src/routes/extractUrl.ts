@@ -1,9 +1,6 @@
-import { Hono } from "hono";
-import { extractFromPdf } from "@heatsync/backend/services/openai";
-import type {
-  ExtractResponse,
-  ExtractErrorResponse,
-} from "@heatsync/shared";
+import { Hono } from 'hono';
+import { extractFromPdf } from '@heatsync/backend/services/openai';
+import type { ExtractResponse, ExtractErrorResponse } from '@heatsync/shared';
 
 export const extractUrlRoutes = new Hono();
 
@@ -19,7 +16,7 @@ interface ExtractUrlRequestBody {
  * Request: JSON { url: string, swimmer: string }
  * Response: ExtractionResult JSON
  */
-extractUrlRoutes.post("/", async (c) => {
+extractUrlRoutes.post('/', async (c) => {
   try {
     // Parse request body
     const body = await c.req.json<ExtractUrlRequestBody>();
@@ -27,7 +24,7 @@ extractUrlRoutes.post("/", async (c) => {
     if (!body.url) {
       const errorResponse: ExtractErrorResponse = {
         success: false,
-        error: "No URL provided",
+        error: 'No URL provided',
         details: 'Expected JSON body with "url" field',
       };
       return c.json(errorResponse, 400);
@@ -36,7 +33,7 @@ extractUrlRoutes.post("/", async (c) => {
     if (!body.swimmer) {
       const errorResponse: ExtractErrorResponse = {
         success: false,
-        error: "No swimmer name provided",
+        error: 'No swimmer name provided',
         details: 'Expected JSON body with "swimmer" field',
       };
       return c.json(errorResponse, 400);
@@ -49,18 +46,18 @@ extractUrlRoutes.post("/", async (c) => {
     } catch {
       const errorResponse: ExtractErrorResponse = {
         success: false,
-        error: "Invalid URL format",
-        details: "Please provide a valid URL",
+        error: 'Invalid URL format',
+        details: 'Please provide a valid URL',
       };
       return c.json(errorResponse, 400);
     }
 
     // Only allow http/https protocols
-    if (!["http:", "https:"].includes(parsedUrl.protocol)) {
+    if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
       const errorResponse: ExtractErrorResponse = {
         success: false,
-        error: "Invalid URL protocol",
-        details: "Only HTTP and HTTPS URLs are supported",
+        error: 'Invalid URL protocol',
+        details: 'Only HTTP and HTTPS URLs are supported',
       };
       return c.json(errorResponse, 400);
     }
@@ -71,25 +68,25 @@ extractUrlRoutes.post("/", async (c) => {
     // Download the PDF
     const response = await fetch(body.url, {
       headers: {
-        "User-Agent": "HeatSync/1.0",
+        'User-Agent': 'HeatSync/1.0',
       },
     });
 
     if (!response.ok) {
       const errorResponse: ExtractErrorResponse = {
         success: false,
-        error: "Failed to download PDF",
+        error: 'Failed to download PDF',
         details: `HTTP ${response.status}: ${response.statusText}`,
       };
       return c.json(errorResponse, 400);
     }
 
     // Validate content type
-    const contentType = response.headers.get("content-type");
-    if (!contentType?.includes("application/pdf")) {
+    const contentType = response.headers.get('content-type');
+    if (!contentType?.includes('application/pdf')) {
       const errorResponse: ExtractErrorResponse = {
         success: false,
-        error: "URL does not point to a PDF",
+        error: 'URL does not point to a PDF',
         details: `Expected application/pdf, got ${contentType}`,
       };
       return c.json(errorResponse, 400);
@@ -100,11 +97,9 @@ extractUrlRoutes.post("/", async (c) => {
     console.log(`Downloaded ${buffer.byteLength} bytes`);
 
     // Upload PDF directly to OpenAI for extraction
-    console.log("Uploading PDF to OpenAI...");
+    console.log('Uploading PDF to OpenAI...');
     const extractionResult = await extractFromPdf(buffer, body.swimmer);
-    console.log(
-      `Found ${extractionResult.events.length} events for ${body.swimmer}`,
-    );
+    console.log(`Found ${extractionResult.events.length} events for ${body.swimmer}`);
 
     const apiResponse: ExtractResponse = {
       success: true,
@@ -113,12 +108,12 @@ extractUrlRoutes.post("/", async (c) => {
 
     return c.json(apiResponse);
   } catch (error) {
-    console.error("Extraction error:", error);
+    console.error('Extraction error:', error);
 
     const errorResponse: ExtractErrorResponse = {
       success: false,
-      error: "Extraction failed",
-      details: error instanceof Error ? error.message : "Unknown error",
+      error: 'Extraction failed',
+      details: error instanceof Error ? error.message : 'Unknown error',
     };
 
     return c.json(errorResponse, 500);

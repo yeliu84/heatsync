@@ -1,19 +1,17 @@
-import OpenAI from "openai";
-import type { ExtractionResult } from "@heatsync/shared";
-import { renderPdfToImages } from "./pdf";
+import OpenAI from 'openai';
+import type { ExtractionResult } from '@heatsync/shared';
+import { renderPdfToImages } from './pdf';
 
 /**
  * Normalize swimmer name to consistent "First Last" format
  * Handles input in either "First Last" or "Last, First" format
  */
-const normalizeSwimmerName = (
-  name: string
-): { firstLast: string; lastFirst: string } => {
+const normalizeSwimmerName = (name: string): { firstLast: string; lastFirst: string } => {
   const trimmed = name.trim();
 
-  if (trimmed.includes(",")) {
+  if (trimmed.includes(',')) {
     // Input is "Last, First" format - split and swap
-    const [last, first] = trimmed.split(",").map((s) => s.trim());
+    const [last, first] = trimmed.split(',').map((s) => s.trim());
     return {
       firstLast: `${first} ${last}`,
       lastFirst: `${last}, ${first}`,
@@ -23,7 +21,7 @@ const normalizeSwimmerName = (
   // Input is "First Last" format - split and create both
   const parts = trimmed.split(/\s+/);
   if (parts.length >= 2) {
-    const first = parts.slice(0, -1).join(" ");
+    const first = parts.slice(0, -1).join(' ');
     const last = parts[parts.length - 1];
     return {
       firstLast: trimmed,
@@ -103,10 +101,10 @@ Before returning your response, re-scan the ENTIRE document one more time to con
  */
 const createOpenAIClient = (): OpenAI => {
   const apiKey = Bun.env.OPENAI_API_KEY;
-  const baseURL = Bun.env.OPENAI_BASE_URL || "https://api.openai.com/v1";
+  const baseURL = Bun.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
 
   if (!apiKey) {
-    throw new Error("OPENAI_API_KEY environment variable is required");
+    throw new Error('OPENAI_API_KEY environment variable is required');
   }
 
   return new OpenAI({
@@ -123,9 +121,7 @@ const parseExtractionResponse = (responseText: string): ExtractionResult => {
 
   // Parse sessionDate with fallback to meetDate for backward compatibility
   const sessionDateStr = parsed.sessionDate || parsed.meetDate;
-  const sessionDate = sessionDateStr
-    ? new Date(sessionDateStr)
-    : new Date();
+  const sessionDate = sessionDateStr ? new Date(sessionDateStr) : new Date();
 
   // Parse optional meetDateRange
   const meetDateRange = parsed.meetDateRange
@@ -136,16 +132,16 @@ const parseExtractionResponse = (responseText: string): ExtractionResult => {
     : undefined;
 
   return {
-    meetName: parsed.meetName || "Unknown Meet",
+    meetName: parsed.meetName || 'Unknown Meet',
     sessionDate,
     meetDateRange,
     venue: parsed.venue || undefined,
     events: (parsed.events || []).map((event: Record<string, unknown>) => ({
       eventNumber: Number(event.eventNumber) || 0,
-      eventName: String(event.eventName || "Unknown Event"),
+      eventName: String(event.eventName || 'Unknown Event'),
       heatNumber: Number(event.heatNumber) || 0,
       lane: Number(event.lane) || 0,
-      swimmerName: String(event.swimmerName || "Unknown"),
+      swimmerName: String(event.swimmerName || 'Unknown'),
       age: event.age ? Number(event.age) : undefined,
       team: event.team ? String(event.team) : undefined,
       seedTime: event.seedTime ? String(event.seedTime) : undefined,
@@ -160,7 +156,7 @@ const parseExtractionResponse = (responseText: string): ExtractionResult => {
  * Check if model supports direct PDF file upload (GPT models)
  */
 const isGptModel = (model: string): boolean => {
-  return model.startsWith("gpt-");
+  return model.startsWith('gpt-');
 };
 
 type MessageContent = OpenAI.Chat.Completions.ChatCompletionContentPart[];
@@ -171,31 +167,28 @@ type MessageContent = OpenAI.Chat.Completions.ChatCompletionContentPart[];
 const buildGptContent = async (
   openai: OpenAI,
   buffer: ArrayBuffer,
-  swimmerName: string
+  swimmerName: string,
 ): Promise<MessageContent> => {
-  console.log("Using direct PDF file upload...");
+  console.log('Using direct PDF file upload...');
 
   const file = await openai.files.create({
-    file: new File([buffer], "heatsheet.pdf", { type: "application/pdf" }),
-    purpose: "user_data",
+    file: new File([buffer], 'heatsheet.pdf', { type: 'application/pdf' }),
+    purpose: 'user_data',
   });
 
   console.log(`Uploaded PDF as file_id: ${file.id}`);
 
   return [
-    { type: "file", file: { file_id: file.id } },
-    { type: "text", text: buildExtractionPrompt(swimmerName) },
+    { type: 'file', file: { file_id: file.id } },
+    { type: 'text', text: buildExtractionPrompt(swimmerName) },
   ];
 };
 
 /**
  * Build message content for non-GPT models (image rendering)
  */
-const buildImageContent = (
-  buffer: ArrayBuffer,
-  swimmerName: string
-): MessageContent => {
-  console.log("Using PDF-to-image rendering...");
+const buildImageContent = (buffer: ArrayBuffer, swimmerName: string): MessageContent => {
+  console.log('Using PDF-to-image rendering...');
 
   const images = renderPdfToImages(buffer);
   console.log(`Rendered ${images.length} pages`);
@@ -203,11 +196,11 @@ const buildImageContent = (
   return [
     ...images.map(
       (url): OpenAI.Chat.Completions.ChatCompletionContentPartImage => ({
-        type: "image_url",
-        image_url: { url, detail: "high" },
-      })
+        type: 'image_url',
+        image_url: { url, detail: 'high' },
+      }),
     ),
-    { type: "text", text: buildExtractionPrompt(swimmerName) },
+    { type: 'text', text: buildExtractionPrompt(swimmerName) },
   ];
 };
 
@@ -222,10 +215,10 @@ const buildImageContent = (
  */
 export const extractFromPdf = async (
   buffer: ArrayBuffer,
-  swimmerName: string
+  swimmerName: string,
 ): Promise<ExtractionResult> => {
   const openai = createOpenAIClient();
-  const model = Bun.env.OPENAI_MODEL || "gpt-4o";
+  const model = Bun.env.OPENAI_MODEL || 'gpt-4o';
   const useGpt = isGptModel(model);
 
   console.log(`Processing PDF (${buffer.byteLength} bytes) with model: ${model}`);
@@ -238,26 +231,24 @@ export const extractFromPdf = async (
 
   const response = await openai.chat.completions.create({
     model,
-    messages: [{ role: "user", content }],
-    response_format: { type: "json_object" },
+    messages: [{ role: 'user', content }],
+    response_format: { type: 'json_object' },
     temperature: 0,
-    ...(useGpt
-      ? { max_completion_tokens: 16000 }
-      : { max_tokens: 16000 }),
+    ...(useGpt ? { max_completion_tokens: 16000 } : { max_tokens: 16000 }),
   });
 
   const responseText = response.choices[0]?.message?.content;
 
   if (!responseText) {
     console.error(
-      "Response structure:",
+      'Response structure:',
       JSON.stringify({
         finish_reason: response.choices[0]?.finish_reason,
         refusal: response.choices[0]?.message?.refusal,
-      })
+      }),
     );
     throw new Error(
-      `Empty response from AI model (finish_reason: ${response.choices[0]?.finish_reason})`
+      `Empty response from AI model (finish_reason: ${response.choices[0]?.finish_reason})`,
     );
   }
 
@@ -266,9 +257,7 @@ export const extractFromPdf = async (
 
   // Post-filter: Remove events where the returned name doesn't match the requested name
   // This catches cases where the AI incorrectly matched phonetically similar names
-  const matchedEvents = result.events.filter((e) =>
-    namesMatch(swimmerName, e.swimmerName)
-  );
+  const matchedEvents = result.events.filter((e) => namesMatch(swimmerName, e.swimmerName));
   const filteredCount = result.events.length - matchedEvents.length;
 
   if (filteredCount > 0) {
@@ -276,10 +265,10 @@ export const extractFromPdf = async (
       ...new Set(
         result.events
           .filter((e) => !namesMatch(swimmerName, e.swimmerName))
-          .map((e) => e.swimmerName)
+          .map((e) => e.swimmerName),
       ),
     ];
-    const warning = `Filtered ${filteredCount} event(s) for different swimmer(s): ${filteredNames.join(", ")}`;
+    const warning = `Filtered ${filteredCount} event(s) for different swimmer(s): ${filteredNames.join(', ')}`;
     console.log(warning);
     result.warnings = [...(result.warnings || []), warning];
   }
