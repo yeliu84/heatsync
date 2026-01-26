@@ -1,12 +1,14 @@
 {
   "name": "heatsync",
   "private": true,
-  "workspaces": ["packages/*"],
-	"devDependencies": {
-		"prettier": "^3.7.4",
-		"prettier-plugin-svelte": "^3.4.0",
-		"prettier-plugin-tailwindcss": "^0.7.2"
-	},
+  "workspaces": [
+    "packages/*"
+  ],
+  "devDependencies": {
+    "prettier": "^3.7.4",
+    "prettier-plugin-svelte": "^3.4.0",
+    "prettier-plugin-tailwindcss": "^0.7.2"
+  },
   "scripts": {
     "backend:dev": "bun run --cwd packages/backend dev",
     "backend:start": "bun run --cwd packages/backend start",
@@ -21,6 +23,7 @@
     "start": "bun run --cwd packages/backend start",
     "clean": "rm -rf packages/webapp/build packages/backend/public",
     "docker:build": "docker build -t heatsync .",
-    "docker:run": "docker run -p 8000:8000 --env-file .env heatsync"
+    "docker:run": "docker run -p 8000:8000 --env-file .env heatsync",
+    "format": "prettier packages/ --write"
   }
 }

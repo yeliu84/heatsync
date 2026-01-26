@@ -3,11 +3,7 @@
   import SwimmerSearch from '$lib/components/SwimmerSearch.svelte';
   import EventList from '$lib/components/EventList.svelte';
   import CalendarExport from '$lib/components/CalendarExport.svelte';
-  import {
-    extractionResult,
-    selectedEventIds,
-    resetStores,
-  } from '$lib/stores/extraction';
+  import { extractionResult, selectedEventIds, resetStores } from '$lib/stores/extraction';
 
   const handleStartOver = () => {
     resetStores();
