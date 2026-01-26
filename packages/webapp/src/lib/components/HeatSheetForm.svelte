@@ -120,17 +120,28 @@
 	};
 
 	const pasteFromClipboard = async () => {
-		try {
-			const text = await navigator.clipboard.readText();
-			if (text.startsWith('http://') || text.startsWith('https://')) {
-				pdfUrl = text;
-				errorMessage = '';
-			} else {
-				errorMessage = 'Clipboard does not contain a valid URL';
+		// Try modern clipboard API first (works on desktop browsers and some mobile)
+		if (navigator.clipboard?.readText) {
+			try {
+				const text = await navigator.clipboard.readText();
+				if (text.startsWith('http://') || text.startsWith('https://')) {
+					pdfUrl = text;
+					return;
+				} else {
+					toasts.warning('Clipboard does not contain a valid URL');
+					return;
+				}
+			} catch {
+				// Clipboard API failed (iOS Safari restriction), fall through to manual paste guidance
 			}
-		} catch {
-			// Clipboard access denied - fail silently or show subtle feedback
-			errorMessage = 'Could not access clipboard';
+		}
+
+		// Fallback: Focus URL input and guide user to paste manually
+		// iOS Safari allows paste via the native context menu (tap-and-hold on focused input)
+		const urlInput = document.getElementById('pdf-url') as HTMLInputElement;
+		if (urlInput) {
+			urlInput.focus();
+			toasts.info('Tap the input field and select "Paste" to paste your URL');
 		}
 	};
 

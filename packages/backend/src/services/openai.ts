@@ -150,6 +150,7 @@ const parseExtractionResponse = (responseText: string): ExtractionResult => {
       team: event.team ? String(event.team) : undefined,
       seedTime: event.seedTime ? String(event.seedTime) : undefined,
       heatStartTime: event.heatStartTime ? String(event.heatStartTime) : undefined,
+      sessionDate, // Attach the session date to each event for self-contained display
     })),
     warnings: parsed.warnings || undefined,
   };

@@ -26,6 +26,8 @@ Enhancements based on user feedback.
 | Feature | Description | Status |
 |---------|-------------|--------|
 | URL paste input | Allow users to paste a URL to a heat sheet PDF instead of uploading | Complete |
+| iOS Safari clipboard fix | Fallback for clipboard API restrictions on iOS Safari - focuses input and guides manual paste | Complete |
+| Session date display | EventCard shows session date (e.g., "Saturday, Jan 17") for each event | Complete |
 | Multi-swimmer search | Search for multiple swimmers at once (siblings) | Planned |
 | Google Calendar direct add | "Add to Google Calendar" button with pre-filled link | Planned |
 | Event time estimation | If times missing, estimate based on event order + avg duration | Planned |

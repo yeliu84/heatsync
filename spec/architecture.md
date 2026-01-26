@@ -152,6 +152,7 @@ interface SwimEvent {
   team?: string;
   seedTime?: string;          // e.g., "1:05.32" or "NT"
   heatStartTime?: string;     // "HH:MM" 24-hour format
+  sessionDate?: Date;         // The date of the session this event occurs in
 }
 
 // Unique swimmer profile for disambiguation
@@ -291,12 +292,22 @@ Each event card displays swimmer info in the format: `Name (Team, Age)`
 - Name in medium weight
 - Team and age in smaller, lighter text inside parentheses
 - Comma separator only when both team and age are present
+- Session date displayed inline (e.g., "• Saturday, Jan 17") when available
+- Date uses UTC timezone for display to avoid timezone-related off-by-one errors
 
 **Selection Behavior:**
 - All events are auto-selected when extraction completes (`selectAllEvents`)
 - Header shows event count and selected count: "3 events found (3 selected)"
 - "Select All / Select None" toggle button in the event list header
 - Individual event cards have checkbox toggles
+
+### iOS Safari Clipboard Handling
+
+The URL paste button uses a fallback strategy for iOS Safari compatibility:
+
+1. **Try modern clipboard API first:** `navigator.clipboard.readText()` works on desktop browsers
+2. **On failure (iOS Safari):** Focus the URL input field and show a toast guiding the user to tap-and-hold and select "Paste" from the native context menu
+3. **Toast notifications:** Used instead of inline error messages for better mobile visibility
 
 ## Environment Variables
 

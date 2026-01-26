@@ -334,3 +334,5 @@ No environment variables required. The webapp uses relative `/api` paths which a
 | 2026-01-26 | 5         | UI simplification - Removed progress bar/stepper component (had sync issues with appState), status is shown in button only |
 | 2026-01-26 | 5         | Verified completion: Loading skeletons (EventCardSkeleton with pulse animation), mobile responsiveness (sm: breakpoints), rate limiting (10 req/min per IP), help/FAQ page (8 FAQs + quick start guide), sample heat sheets (2 PDFs) |
 | 2026-01-26 | 5         | Deployed to AI Builder Space: https://heatsync.ai-builders.space/ |
+| 2026-01-26 | 5         | iOS Safari clipboard fix - Fallback for restricted clipboard API: focuses input + toast guidance for manual paste |
+| 2026-01-26 | 5         | Session date display - Added `sessionDate` to SwimEvent type, EventCard displays date with UTC timezone to avoid off-by-one errors |

@@ -25,6 +25,20 @@
 		const hour12 = hour % 12 || 12;
 		return `${hour12}:${minute} ${period}`;
 	}
+
+	/**
+	 * Format session date for display (e.g., "Saturday, Jan 17")
+	 * Uses UTC timezone to avoid local timezone shifting the date back a day
+	 */
+	function formatSessionDate(date?: Date): string {
+		if (!date) return '';
+		return new Date(date).toLocaleDateString('en-US', {
+			weekday: 'long',
+			month: 'short',
+			day: 'numeric',
+			timeZone: 'UTC'
+		});
+	}
 </script>
 
 <button
@@ -37,7 +51,7 @@
 >
 	<div class="flex items-start justify-between gap-3">
 		<div class="flex-1">
-			<div class="flex items-center gap-2">
+			<div class="flex flex-wrap items-center gap-2">
 				<span class="rounded bg-sky-100 px-2 py-0.5 text-xs font-medium text-sky-700">
 					Event {event.eventNumber}
 				</span>
@@ -47,6 +61,9 @@
 						| {formatHeatTime(event.heatStartTime)}
 					{/if}
 				</span>
+				{#if event.sessionDate}
+					<span class="text-xs text-sky-400">• {formatSessionDate(event.sessionDate)}</span>
+				{/if}
 			</div>
 			<h3 class="mt-2 truncate font-medium text-sky-900">
 				{event.swimmerName}

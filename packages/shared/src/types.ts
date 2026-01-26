@@ -11,6 +11,7 @@ export interface SwimEvent {
 	team?: string;
 	seedTime?: string; // e.g., "1:05.32" or "NT"
 	heatStartTime?: string; // "HH:MM" 24-hour format
+	sessionDate?: Date; // The date of the session this event occurs in
 }
 
 /**
