@@ -249,12 +249,10 @@ Complete MVP - upload → search → export to calendar
 - [x] Loading skeletons and smooth animations
 - [x] Mobile responsiveness (Tailwind responsive breakpoints throughout)
 - [x] Rate limiting on backend API (10 req/min per IP)
-- [ ] Add basic analytics (optional, privacy-respecting)
+- [x] Add basic analytics (Umami Cloud - privacy-respecting, GDPR compliant)
 - [x] Write user-facing help/FAQ section
 - [x] Create sample heat sheet for testing/demo
 - [x] Deploy to AI Builder Space (https://heatsync.ai-builders.space/)
-- [ ] Test with 5+ real heat sheets from different software
-- [ ] Performance optimization (lazy loading, image compression)
 
 ### Deliverable
 
@@ -336,3 +334,4 @@ No environment variables required. The webapp uses relative `/api` paths which a
 | 2026-01-26 | 5         | Deployed to AI Builder Space: https://heatsync.ai-builders.space/ |
 | 2026-01-26 | 5         | iOS Safari clipboard fix - Fallback for restricted clipboard API: focuses input + toast guidance for manual paste |
 | 2026-01-26 | 5         | Session date display - Added `sessionDate` to SwimEvent type, EventCard displays date with UTC timezone to avoid off-by-one errors |
+| 2026-01-26 | 5         | Analytics - Added Umami Cloud integration for privacy-respecting analytics (page views, extraction events, export events) |

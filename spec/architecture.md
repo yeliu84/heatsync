@@ -496,3 +496,51 @@ If using a shared API key in production:
 - Implement request rate limiting on `/extract` endpoint
 - Consider per-session limits (e.g., 10 extractions per hour)
 - Cache extraction results by PDF hash to reduce duplicate requests
+
+## Analytics
+
+HeatSync uses **Umami Cloud** for privacy-respecting analytics.
+
+### Why Umami?
+
+| Consideration | Decision |
+|---------------|----------|
+| Privacy | No cookies, no personal data collection, GDPR compliant by default |
+| Performance | ~2KB script, loads asynchronously, no impact on page performance |
+| Cost | Free tier (10K events/month) sufficient for MVP |
+| Simplicity | Frontend-only integration, no backend changes needed |
+
+### What's Tracked
+
+**Automatic (via Umami script):**
+- Page views (landing page, help page)
+- Referrers, countries, devices, browsers
+
+**Custom Events (via `analytics.ts`):**
+
+| Event | Trigger | Data |
+|-------|---------|------|
+| `extraction_started` | Form submitted | `method: 'pdf' \| 'url'` |
+| `extraction_success` | Events extracted | `eventCount: number` |
+| `extraction_failed` | Error occurred | `error: string` (truncated to 50 chars) |
+| `export_clicked` | ICS downloaded | `eventCount: number` |
+
+### Implementation
+
+The analytics module (`src/lib/utils/analytics.ts`) provides type-safe event helpers:
+
+```typescript
+import { trackExtractionStarted, trackExtractionSuccess } from '$lib/utils/analytics';
+
+// Track when user submits form
+trackExtractionStarted('pdf');
+
+// Track successful extraction
+trackExtractionSuccess(5);
+```
+
+**Graceful Degradation:** If Umami is blocked by ad blockers, tracking calls fail silently without affecting app functionality.
+
+### Dashboard
+
+Analytics data is available at [Umami Cloud](https://cloud.umami.is) (requires login).

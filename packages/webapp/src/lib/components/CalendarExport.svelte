@@ -2,6 +2,7 @@
   import { selectedEvents, extractionResult } from '$lib/stores/extraction';
   import { generateCalendarEvents, downloadIcsFile } from '$lib/utils/calendar';
   import { toasts } from '$lib/stores/toast';
+  import { trackExportClicked } from '$lib/utils/analytics';
 
   interface Props {
     disabled?: boolean;
@@ -29,6 +30,7 @@
     }
 
     downloadIcsFile(result.icsContent!, result.filename!);
+    trackExportClicked($selectedEvents.length);
 
     if (result.skippedCount > 0) {
       toasts.warning(`Downloaded! ${result.skippedCount} event(s) skipped (no start time)`);
