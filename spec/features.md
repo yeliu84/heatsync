@@ -70,6 +70,7 @@ The extraction system has been optimized to handle real-world heat sheets accura
 | Challenge | Solution |
 |-----------|----------|
 | Multiple swimmers with same last name | Explicit disambiguation in prompt (e.g., "Liu, Elsa" ≠ "Liu, Elly") |
+| Phonetically similar names | Post-processing validation filters out mismatched names (e.g., "Li, Elsie" ≠ "Liu, Elly") |
 | Same name, different team/age | Disambiguation combobox lets user select their swimmer profile |
 | Name format variations | Input normalization handles both "First Last" and "Last, First" |
 | Incomplete scanning | Thoroughness instructions + final verification step |

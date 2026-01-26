@@ -383,6 +383,8 @@ The extraction prompt has been optimized for accuracy with faster models (e.g., 
 | Enhancement | Purpose |
 |-------------|---------|
 | **Name Normalization** | Converts input to both "First Last" and "Last, First" formats for reliable matching |
+| **Exact Name Return** | Prompt instructs AI to return the exact name from the PDF, not the searched name |
+| **Post-Processing Validation** | Backend filters out events where returned `swimmerName` doesn't match the requested name |
 | **Disambiguation** | Explicit warning that multiple swimmers may share last names (e.g., "Liu, Elsa" vs "Liu, Elly") |
 | **Age Extraction** | Extracts swimmer age from heat sheet for disambiguation when multiple swimmers share the same name |
 | **Thoroughness** | Instructions to scan ALL pages before returning, prevents early termination |
@@ -395,7 +397,14 @@ Example disambiguation instruction in prompt:
 ```
 - IMPORTANT: There may be MULTIPLE swimmers with the same LAST NAME
 - Do NOT include events for swimmers with similar names (e.g., "Liu, Elsa" is NOT "Liu, Elly")
+- Do NOT match phonetically similar names (e.g., "Li, Elsie" is NOT "Liu, Elly")
 ```
+
+**Defense in Depth:** The extraction uses a two-layer validation approach:
+1. **Prompt engineering** - Instructs AI to return exact names and reject phonetic matches
+2. **Post-processing filter** - `namesMatch()` function validates that returned `swimmerName` matches the requested name (case-insensitive, format-agnostic via `normalizeSwimmerName`)
+
+If the AI incorrectly matches a phonetically similar name (e.g., "Elsie Li" for "Elly Liu"), the post-filter removes these events and adds a warning to the response.
 
 ### Model Requirements
 
