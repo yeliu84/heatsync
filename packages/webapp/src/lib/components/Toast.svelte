@@ -42,11 +42,11 @@
 	};
 </script>
 
-<div class="pointer-events-none fixed inset-x-0 bottom-0 z-50 flex flex-col items-center gap-2 p-4">
+<div class="pointer-events-none fixed inset-x-0 top-0 z-50 flex flex-col items-center gap-2 p-4">
 	{#each $toasts as toast (toast.id)}
 		<div
 			class="pointer-events-auto flex w-full max-w-sm items-start gap-3 rounded-lg border p-4 shadow-lg {getStyles(toast.type)}"
-			in:fly={{ y: 50, duration: 200 }}
+			in:fly={{ y: -50, duration: 200 }}
 			out:fade={{ duration: 150 }}
 			role="alert"
 		>

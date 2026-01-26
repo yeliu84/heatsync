@@ -16,7 +16,7 @@ Core features required for initial launch.
 | Loading States | Progress indicators during extraction, status in button | Complete |
 | Form State Management | Disable form after processing, "Start Over" to reset | Complete |
 | Swimmer Disambiguation | Combobox to select swimmer when same name has different team/age | Complete |
-| Error Handling | Clear messages for failed uploads/extraction | Partial |
+| Error Handling | Clear messages for failed uploads/extraction, graceful "no events found" recovery | Complete |
 | Mobile Responsive | Works on phones (parents at meets) | Pending |
 
 ## Version 1.1 (Polish)

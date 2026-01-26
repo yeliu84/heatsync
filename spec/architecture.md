@@ -252,13 +252,16 @@ The application uses a simple state machine stored in `appState`:
 |-------|-------------|-------------|
 | `upload` | Initial state, waiting for input | Form enabled, button shows "Find My Events" |
 | `extracting` | Processing PDF with AI | Form disabled, button shows spinner + status text |
-| `search` | Extraction complete | Form disabled, button shows "Found X events!", results visible |
+| `search` | Extraction complete with events | Form disabled, button shows "Found X events!", results visible |
 | `export` | Events selected for export | Same as search, export section active |
+
+**Note:** When extraction completes with 0 events, the app stays in `upload` state (not `search`) to keep the form editable, showing a toast notification instead of locking the form.
 
 ### Form State Behavior
 
 - **During extraction (`extracting`):** All form fields disabled, button shows real-time status with spinner ("Fetching PDF from URL...", "Processing PDF...")
-- **After extraction (`search`):** Form remains disabled to prevent accidental re-submission, button displays result count
+- **After successful extraction (`search`):** Form remains disabled to prevent accidental re-submission, button displays result count
+- **No events found:** Form returns to `upload` state (remains editable), toast notification shows "No events found for [name]", allowing users to modify input and retry
 - **Result sections:** Only appear when `extractionResult` contains events (not just when state changes)
 - **Start Over:** Resets all stores to initial state via `resetStores()`, returns to `upload` state
 

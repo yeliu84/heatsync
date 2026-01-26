@@ -200,10 +200,17 @@
 				throw new Error(result.error + (result.details ? `: ${result.details}` : ''));
 			}
 
-			extractionStatus = `Found ${result.data.events.length} events!`;
 			extractionResult.set(result.data);
-			selectAllEvents(result.data.events.length);
-			appState.set('search');
+
+			if (result.data.events.length > 0) {
+				extractionStatus = `Found ${result.data.events.length} events!`;
+				selectAllEvents(result.data.events.length);
+				appState.set('search');
+			} else {
+				toasts.info(`No events found for "${localSwimmerName.trim()}"`);
+				extractionStatus = '';
+				appState.set('upload');
+			}
 		} catch (error) {
 			console.error('Extraction failed:', error);
 			const message = error instanceof Error ? error.message : 'Extraction failed';
