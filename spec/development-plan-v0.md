@@ -252,7 +252,7 @@ Complete MVP - upload → search → export to calendar
 - [ ] Add basic analytics (optional, privacy-respecting)
 - [x] Write user-facing help/FAQ section
 - [x] Create sample heat sheet for testing/demo
-- [ ] Deploy to AI Builder Space
+- [x] Deploy to AI Builder Space (https://heatsync.ai-builders.space/)
 - [ ] Test with 5+ real heat sheets from different software
 - [ ] Performance optimization (lazy loading, image compression)
 
@@ -333,3 +333,4 @@ No environment variables required. The webapp uses relative `/api` paths which a
 | 2026-01-26 | 5         | UX fix - Form stays editable when no events found (stays in `upload` state instead of `search`), shows toast notification instead of locking form |
 | 2026-01-26 | 5         | UI simplification - Removed progress bar/stepper component (had sync issues with appState), status is shown in button only |
 | 2026-01-26 | 5         | Verified completion: Loading skeletons (EventCardSkeleton with pulse animation), mobile responsiveness (sm: breakpoints), rate limiting (10 req/min per IP), help/FAQ page (8 FAQs + quick start guide), sample heat sheets (2 PDFs) |
+| 2026-01-26 | 5         | Deployed to AI Builder Space: https://heatsync.ai-builders.space/ |
