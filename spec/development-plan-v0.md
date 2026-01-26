@@ -331,3 +331,4 @@ No environment variables required. The webapp uses relative `/api` paths which a
 | 2026-01-25 | 4         | Calendar Export - Client-side ICS generation, event title format "Name - E# H# L# - Event Name", floating local time (no TZ conversion), events without start times skipped with warning |
 | 2026-01-25 | 5         | Deployment infrastructure - Single-server architecture, routes moved to /api prefix, static file serving, SPA fallback, Vite proxy, multi-stage Dockerfile, docker scripts |
 | 2026-01-26 | 5         | UX fix - Form stays editable when no events found (stays in `upload` state instead of `search`), shows toast notification instead of locking form |
+| 2026-01-26 | 5         | UI simplification - Removed progress bar/stepper component (had sync issues with appState), status is shown in button only |

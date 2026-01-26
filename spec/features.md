@@ -13,7 +13,7 @@ Core features required for initial launch.
 | Event Selection | Checkboxes with Select All/None toggle, auto-select on extraction | Complete |
 | Reminder Choice | Radio buttons: 5, 10 (default), 15 min before | Complete |
 | .ics Export | Download .ics file with selected events | Complete |
-| Loading States | Progress indicators during extraction, status in button | Complete |
+| Loading States | Status shown in submit button during extraction | Complete |
 | Form State Management | Disable form after processing, "Start Over" to reset | Complete |
 | Swimmer Disambiguation | Combobox to select swimmer when same name has different team/age | Complete |
 | Error Handling | Clear messages for failed uploads/extraction, graceful "no events found" recovery | Complete |
