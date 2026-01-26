@@ -10,6 +10,10 @@
     "webapp:preview": "bun run --cwd packages/webapp preview",
     "webapp:check": "bun run --cwd packages/webapp check",
     "webapp:lint": "bun run --cwd packages/webapp lint",
-    "dev": "bun run backend:dev & bun run webapp:dev"
+    "dev": "bun run backend:dev & bun run webapp:dev",
+    "build": "bun run webapp:build && bun run build:copy-static",
+    "build:copy-static": "rm -rf packages/backend/public && cp -r packages/webapp/build packages/backend/public",
+    "start": "bun run --cwd packages/backend start",
+    "clean": "rm -rf packages/webapp/build packages/backend/public"
   }
 }

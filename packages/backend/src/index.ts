@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
+import { serveStatic } from "hono/bun";
 import { healthRoutes } from "@heatsync/backend/routes/health";
 import { extractRoutes } from "@heatsync/backend/routes/extract";
 import { extractUrlRoutes } from "@heatsync/backend/routes/extractUrl";
@@ -11,14 +12,15 @@ const app = new Hono();
 app.use("/*", cors());
 app.use("/*", logger());
 
-// Routes
-app.route("/health", healthRoutes);
-app.route("/extract", extractRoutes);
-app.route("/extractUrl", extractUrlRoutes);
+// API Routes - grouped under /api prefix
+const api = new Hono();
+api.route("/health", healthRoutes);
+api.route("/extract", extractRoutes);
+api.route("/extractUrl", extractUrlRoutes);
 
-// Error handling
-app.onError((err, c) => {
-	console.error("Server error:", err);
+// API error handling
+api.onError((err, c) => {
+	console.error("API error:", err);
 	return c.json(
 		{
 			success: false,
@@ -29,8 +31,8 @@ app.onError((err, c) => {
 	);
 });
 
-// 404 handler
-app.notFound((c) => {
+// API 404 handler
+api.notFound((c) => {
 	return c.json(
 		{
 			success: false,
@@ -40,7 +42,15 @@ app.notFound((c) => {
 	);
 });
 
-const port = parseInt(Bun.env.PORT || "3001", 10);
+app.route("/api", api);
+
+// Static file serving (production)
+app.use("/*", serveStatic({ root: "./public" }));
+
+// SPA fallback - serve index.html for client-side routing
+app.use("/*", serveStatic({ root: "./public", path: "index.html" }));
+
+const port = parseInt(Bun.env.PORT || "8000", 10);
 
 console.log(`Starting HeatSync backend on port ${port}...`);
 

@@ -10,7 +10,7 @@
 	let localSwimmerName = $state('');
 
 	const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
-	const API_URL = import.meta.env.PUBLIC_API_URL || 'http://localhost:3001';
+	const API_URL = '/api';
 
 	// Form is valid when swimmer name is provided and either URL or file is provided
 	const isFormValid = $derived(
