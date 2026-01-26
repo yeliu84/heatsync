@@ -28,8 +28,9 @@ FROM oven/bun:1-slim AS production
 
 WORKDIR /app
 
-# Copy package files
+# Copy package files (all workspace package.json files needed for lockfile resolution)
 COPY package.json bun.lock* ./
+COPY packages/webapp/package.json ./packages/webapp/
 COPY packages/backend/package.json ./packages/backend/
 COPY packages/shared/package.json ./packages/shared/
 
