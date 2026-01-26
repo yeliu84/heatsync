@@ -14,6 +14,8 @@
     "build": "bun run webapp:build && bun run build:copy-static",
     "build:copy-static": "rm -rf packages/backend/public && cp -r packages/webapp/build packages/backend/public",
     "start": "bun run --cwd packages/backend start",
-    "clean": "rm -rf packages/webapp/build packages/backend/public"
+    "clean": "rm -rf packages/webapp/build packages/backend/public",
+    "docker:build": "docker build -t heatsync .",
+    "docker:run": "docker run -p 8000:8000 --env-file .env heatsync"
   }
 }

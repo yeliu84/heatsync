@@ -10,7 +10,7 @@
 | 3. Swimmer Disambiguation                   | Complete    | 2026-01-25 |
 | 3.5 UI Polish: Event Display & Selection    | Complete    | 2026-01-25 |
 | 4. Calendar Export                          | Complete    | 2026-01-25 |
-| 5. Polish & Launch                          | Not Started | -          |
+| 5. Polish & Launch                          | In Progress | -          |
 
 ---
 
@@ -228,9 +228,22 @@ Complete MVP - upload → search → export to calendar
 
 **Goal:** Production-ready MVP
 
-**Status:** Not Started
+**Status:** In Progress
 
-### Tasks
+### Deployment Infrastructure (Complete)
+
+- [x] Move backend routes to `/api` prefix
+- [x] Add static file serving to backend (serves webapp from `./public`)
+- [x] Add SPA fallback for client-side routing
+- [x] Switch webapp to `adapter-static` with `fallback: index.html`
+- [x] Configure Vite proxy for development (`/api` → backend)
+- [x] Update HeatSheetForm to use `/api` prefix
+- [x] Add production build scripts (`build`, `build:copy-static`, `start`, `clean`)
+- [x] Add Docker scripts (`docker:build`, `docker:run`)
+- [x] Create multi-stage Dockerfile
+- [x] Create .dockerignore
+
+### Remaining Tasks
 
 - [ ] Comprehensive error handling and user feedback
 - [ ] Loading skeletons and smooth animations
@@ -239,7 +252,7 @@ Complete MVP - upload → search → export to calendar
 - [ ] Add basic analytics (optional, privacy-respecting)
 - [ ] Write user-facing help/FAQ section
 - [ ] Create sample heat sheet for testing/demo
-- [ ] Final deployment to AI Builder Space
+- [ ] Deploy to AI Builder Space
 - [ ] Test with 5+ real heat sheets from different software
 - [ ] Performance optimization (lazy loading, image compression)
 
@@ -269,6 +282,19 @@ bun run webapp:preview
 
 # Type checking
 bun run webapp:check
+
+# Production build (webapp + copy to backend/public)
+bun run build
+
+# Start production server
+bun run start
+
+# Clean build artifacts
+bun run clean
+
+# Docker commands
+bun run docker:build    # Build Docker image
+bun run docker:run      # Run container (requires OPENAI_API_KEY env var)
 ```
 
 ## Environment Variables
@@ -276,17 +302,17 @@ bun run webapp:check
 ### Backend (`packages/backend/.env`)
 
 ```bash
-PORT=3001
+PORT=3001                              # Development port (production default: 8000)
 OPENAI_API_KEY=your_api_key_here
 OPENAI_BASE_URL=https://api.openai.com/v1
-OPENAI_MODEL=gpt-4o
+OPENAI_MODEL=gpt-5.2
 ```
 
-### Webapp (`packages/webapp/.env`)
+### Webapp
 
-```bash
-PUBLIC_API_URL=http://localhost:3001
-```
+No environment variables required. The webapp uses relative `/api` paths which are:
+- Proxied to backend during development (via Vite proxy)
+- Served directly in production (single-server deployment)
 
 ---
 
@@ -303,3 +329,4 @@ PUBLIC_API_URL=http://localhost:3001
 | 2026-01-25 | 3         | Swimmer disambiguation - Added age extraction, SwimmerProfile stores, disambiguation combobox when multiple swimmers with same name |
 | 2026-01-25 | 3.5       | UI Polish - Event card shows "Name (Team, Age)" format, auto-select all on extraction, Select All/None toggle button |
 | 2026-01-25 | 4         | Calendar Export - Client-side ICS generation, event title format "Name - E# H# L# - Event Name", floating local time (no TZ conversion), events without start times skipped with warning |
+| 2026-01-25 | 5         | Deployment infrastructure - Single-server architecture, routes moved to /api prefix, static file serving, SPA fallback, Vite proxy, multi-stage Dockerfile, docker scripts |

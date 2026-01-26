@@ -37,22 +37,21 @@ The flake provides:
 
 ## System Architecture
 
+### Production (Single-Server Deployment)
+
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                        Frontend                              │
-│  SvelteKit + TypeScript + TailwindCSS                       │
-│  - PDF upload interface + swimmer name input                │
-│  - Event display & selection                                │
-│  - Calendar event builder                                    │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                        PDF + Swimmer name
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
 │                    Hono Backend Server                       │
-│  POST /extract - Upload PDF + swimmer, extract with AI      │
-│  POST /extractUrl - PDF URL + swimmer, extract with AI      │
-│  GET /health - Health check endpoint                        │
+│  Serves both API and static webapp from single process      │
+├─────────────────────────────────────────────────────────────┤
+│  Static Files (./public)                                     │
+│  - SvelteKit webapp (pre-built)                             │
+│  - SPA fallback to index.html                               │
+├─────────────────────────────────────────────────────────────┤
+│  API Routes (/api/*)                                         │
+│  POST /api/extract - Upload PDF + swimmer, extract with AI  │
+│  POST /api/extractUrl - PDF URL + swimmer, extract with AI  │
+│  GET /api/health - Health check endpoint                    │
 └─────────────────────────────────────────────────────────────┘
                               │
               ┌───────────────┼───────────────┐
@@ -62,6 +61,18 @@ The flake provides:
 │  PDF → PNG conversion    │     │   Vision + Chat completions  │
 │  Server-side rendering   │     │   Structured extraction      │
 └─────────────────────────┘     └─────────────────────────────┘
+```
+
+### Development (Dual-Server with Proxy)
+
+```
+┌──────────────────────────┐        ┌──────────────────────────┐
+│   Vite Dev Server        │        │   Hono Backend Server     │
+│   http://localhost:5173  │───────▶│   http://localhost:3001   │
+│                          │ proxy  │                          │
+│   SvelteKit webapp       │ /api/* │   API routes only        │
+│   Hot module reload      │        │   No static serving      │
+└──────────────────────────┘        └──────────────────────────┘
 ```
 
 ## Directory Structure
@@ -99,16 +110,17 @@ heatsync/
 │   │   └── package.json
 │   ├── backend/                   # Bun API server
 │   │   ├── src/
-│   │   │   ├── index.ts           # Entry point, Hono app
+│   │   │   ├── index.ts           # Entry point, Hono app, static serving
 │   │   │   ├── routes/
-│   │   │   │   ├── extract.ts     # POST /extract - PDF upload + AI
-│   │   │   │   ├── extractUrl.ts  # POST /extractUrl - URL + AI
-│   │   │   │   └── health.ts      # GET /health
+│   │   │   │   ├── extract.ts     # POST /api/extract - PDF upload + AI
+│   │   │   │   ├── extractUrl.ts  # POST /api/extractUrl - URL + AI
+│   │   │   │   └── health.ts      # GET /api/health
 │   │   │   ├── services/
 │   │   │   │   ├── pdf.ts         # mupdf PDF→image conversion
 │   │   │   │   └── openai.ts      # OpenAI API client
 │   │   │   └── types/
 │   │   │       └── index.ts       # Backend-specific types
+│   │   ├── public/                # Static webapp (production build)
 │   │   ├── package.json
 │   │   ├── tsconfig.json
 │   │   └── .env.example
@@ -122,6 +134,8 @@ heatsync/
 │   ├── features.md
 │   └── development-plan-v0.md
 ├── package.json                   # Root workspace config
+├── Dockerfile                     # Multi-stage Docker build
+├── .dockerignore                  # Docker build exclusions
 └── .gitignore
 ```
 
@@ -171,7 +185,9 @@ interface CalendarEvent {
 
 ## Backend API
 
-### POST /extract
+All API routes are prefixed with `/api` in production.
+
+### POST /api/extract
 
 Upload a PDF file for swimmer-specific extraction.
 
@@ -187,7 +203,7 @@ Upload a PDF file for swimmer-specific extraction.
 }
 ```
 
-### POST /extractUrl
+### POST /api/extractUrl
 
 Extract from a PDF URL for a specific swimmer.
 
@@ -199,9 +215,9 @@ Extract from a PDF URL for a specific swimmer.
 }
 ```
 
-**Response:** Same as `/extract`
+**Response:** Same as `/api/extract`
 
-### GET /health
+### GET /api/health
 
 Health check endpoint.
 
@@ -279,35 +295,67 @@ Each event card displays swimmer info in the format: `Name (Team, Age)`
 - "Select All / Select None" toggle button in the event list header
 - Individual event cards have checkbox toggles
 
+## Environment Variables
+
+### File Structure
+
+```
+heatsync/
+├── .envrc                      # Tracked - direnv config, loads .env
+├── .env                        # Gitignored - shared secrets
+└── packages/
+    └── backend/
+        └── .env                # Gitignored - backend-specific overrides
+```
+
+### How It Works
+
+| File | Tracked | Purpose |
+|------|---------|---------|
+| `.envrc` | Yes | Direnv config - calls `dotenv` to load root `.env` into shell |
+| `.env` (root) | No | Shared secrets (`OPENAI_API_KEY`, `OPENAI_MODEL`) |
+| `packages/backend/.env` | No | Backend-specific config (`PORT=3001` for dev) |
+
+**Loading order:**
+1. `direnv` reads `.envrc` and executes `dotenv`
+2. `dotenv` loads root `.env` into the shell environment
+3. When backend runs, Bun also loads `packages/backend/.env`
+4. More specific values override shared ones
+
+**Development:** Both `.env` files are loaded via direnv + Bun
+**Docker:** Only root `.env` is passed via `--env-file .env`
+**Production:** Platform injects environment variables directly
+
+### Required Variables
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `OPENAI_API_KEY` | Yes | - | API key for OpenAI-compatible endpoint |
+| `OPENAI_MODEL` | No | `gpt-5.2` | Model to use for extraction |
+| `OPENAI_BASE_URL` | No | `https://api.openai.com/v1` | API endpoint |
+| `PORT` | No | `8000` (prod) / `3001` (dev) | Server port |
+
 ## AI API Integration
 
 ### Configuration
 
-The backend connects to any OpenAI-compatible chat completions endpoint via environment variables:
-
-```bash
-# Required (in packages/backend/.env)
-OPENAI_API_KEY=your_api_key_here
-
-# Optional (defaults to OpenAI)
-OPENAI_BASE_URL=https://api.openai.com/v1
-OPENAI_MODEL=gpt-4o
-```
+The backend connects to any OpenAI-compatible chat completions endpoint. Environment variables are loaded from the root `.env` file (see Environment Variables section above).
 
 ### Example Configurations
 
-**OpenAI:**
+**OpenAI (default):**
 ```bash
+# .env (root)
 OPENAI_API_KEY=sk-...
-OPENAI_BASE_URL=https://api.openai.com/v1
-OPENAI_MODEL=gpt-4o
+OPENAI_MODEL=gpt-5.2
 ```
 
 **AI Builder Space:**
 ```bash
+# .env (root) or packages/backend/.env
 OPENAI_API_KEY=your_token
 OPENAI_BASE_URL=https://space.ai-builders.com/backend/v1
-OPENAI_MODEL=gemini-2.5-pro
+OPENAI_MODEL=gpt-5
 ```
 
 **Ollama (local):**
@@ -356,10 +404,61 @@ The configured model must support:
 - Structured JSON output
 
 Recommended models:
+- `gpt-5.2` (OpenAI)
 - `gpt-4o` (OpenAI)
 - `gemini-2.5-pro` (via AI Builder Space or Google)
 - `claude-sonnet-4-20250514` (via Anthropic-compatible proxy)
 - `llava` (Ollama, for local development)
+
+## Deployment
+
+### Single-Server Architecture
+
+HeatSync uses a single-server deployment model where the Hono backend serves both the API and the static webapp:
+
+| Path | Handler |
+|------|---------|
+| `/api/*` | API routes (extract, extractUrl, health) |
+| `/*` | Static files from `./public` (SvelteKit build) |
+| `/*` (fallback) | `index.html` for SPA client-side routing |
+
+### Build Process
+
+```bash
+bun run build           # Build webapp + copy to backend/public
+bun run start           # Start production server on port 8000
+```
+
+The build process:
+1. Builds SvelteKit webapp with `adapter-static` → `packages/webapp/build/`
+2. Copies build output to `packages/backend/public/`
+
+### Docker Deployment
+
+```bash
+bun run docker:build    # Build multi-stage Docker image
+bun run docker:run      # Run container (requires OPENAI_API_KEY env var)
+```
+
+The Dockerfile uses a multi-stage build:
+- **Stage 1 (builder)**: Installs all dependencies, builds webapp
+- **Stage 2 (production)**: Slim image with only production dependencies
+
+### Environment Variables (Production)
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `PORT` | No | 8000 | Server port |
+| `OPENAI_API_KEY` | Yes | - | OpenAI API key |
+| `OPENAI_BASE_URL` | No | `https://api.openai.com/v1` | API endpoint |
+| `OPENAI_MODEL` | No | `gpt-5.2` | Model to use |
+
+### AI Builder Space Deployment
+
+HeatSync is designed for deployment to AI Builder Space:
+- Single container deployment
+- PORT injected by platform
+- Static assets served alongside API
 
 ## Security Considerations
 

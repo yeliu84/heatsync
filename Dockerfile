@@ -41,11 +41,13 @@ COPY packages/backend ./packages/backend
 COPY packages/shared ./packages/shared
 COPY --from=builder /app/packages/backend/public ./packages/backend/public
 
-# Set environment
+# Set environment defaults
 ENV NODE_ENV=production
+ENV PORT=8000
+ENV OPENAI_MODEL=gpt-5.2
 
-# Expose port (default 8000)
+# Expose port
 EXPOSE 8000
 
 # Start the server using shell form for PORT env var expansion
-CMD bun run --cwd packages/backend start
+CMD bun run start
