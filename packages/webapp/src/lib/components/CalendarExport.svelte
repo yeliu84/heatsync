@@ -39,7 +39,7 @@
 </script>
 
 <div class="rounded-xl border border-sky-200 bg-white p-6">
-  <h2 class="text-xl font-medium text-sky-900">Export to Calendar</h2>
+  <h2 class="text-xl font-medium text-sky-900">Add to Calendar</h2>
   <div class="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
     <p>
       <strong>Note:</strong> Events are found by AI and may contain errors. Please verify event details
@@ -55,7 +55,7 @@
         disabled
         class="mt-4 w-full cursor-not-allowed rounded-lg bg-sky-200 px-4 py-3 text-lg font-medium text-sky-400"
       >
-        Download .ics File
+        Add
       </button>
     </div>
   {:else}
@@ -80,7 +80,7 @@
           <span class="font-medium">{$selectedEvents.length}</span> event{$selectedEvents.length ===
           1
             ? ''
-            : 's'} will be exported
+            : 's'} will be added to calendar
         </p>
       </div>
 
@@ -89,7 +89,7 @@
         onclick={handleExport}
         class="w-full rounded-lg bg-sky-500 px-4 py-3 text-lg font-medium text-white transition-colors hover:bg-sky-600"
       >
-        Download .ics File
+        Add
       </button>
 
       <p class="text-center text-xs text-sky-400">
