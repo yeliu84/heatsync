@@ -36,6 +36,16 @@ const normalizeSwimmerName = (
 };
 
 /**
+ * Check if two swimmer names match (case-insensitive, format-agnostic)
+ * Uses normalizeSwimmerName to handle "First Last" vs "Last, First" formats
+ */
+const namesMatch = (requestedName: string, returnedName: string): boolean => {
+  const requested = normalizeSwimmerName(requestedName).firstLast.toLowerCase();
+  const returned = normalizeSwimmerName(returnedName).firstLast.toLowerCase();
+  return requested === returned;
+};
+
+/**
  * Build extraction prompt for finding a specific swimmer's events
  */
 const buildExtractionPrompt = (swimmerName: string): string => {
@@ -49,10 +59,12 @@ Find ALL events for swimmer "${firstLast}" in this heat sheet. Return ONLY this 
 NAME MATCHING (CRITICAL):
 - The swimmer's name is: "${firstLast}" (also written as "${lastFirst}")
 - Heat sheets list names in "Last, First" format, so search for EXACTLY: "${lastFirst}"
-- Return swimmerName in "First Last" format: "${firstLast}"
+- IMPORTANT: Return swimmerName with the EXACT name as it appears in the heat sheet, converted to "First Last" format
+- For example: if the PDF shows "Liu, Elly" you must return "Elly Liu" - do NOT substitute the searched name
 - IMPORTANT: There may be MULTIPLE swimmers with the same LAST NAME (e.g., multiple "Liu" swimmers)
 - You MUST match BOTH the first name AND last name EXACTLY - "${lastFirst}" only, not similar names
 - Do NOT include events for swimmers with similar names (e.g., "Liu, Elsa" is NOT "Liu, Elly" - different first names)
+- Do NOT match phonetically similar names (e.g., "Li, Elsie" is NOT "Liu, Elly")
 
 AGE EXTRACTION:
 - Extract the swimmer's age from the age column (the number next to the swimmer name, e.g., 8, 10, 11)
@@ -250,6 +262,29 @@ export const extractFromPdf = async (
 
   const result = parseExtractionResponse(responseText);
   console.log(`Found ${result.events.length} events for ${swimmerName}`);
+
+  // Post-filter: Remove events where the returned name doesn't match the requested name
+  // This catches cases where the AI incorrectly matched phonetically similar names
+  const matchedEvents = result.events.filter((e) =>
+    namesMatch(swimmerName, e.swimmerName)
+  );
+  const filteredCount = result.events.length - matchedEvents.length;
+
+  if (filteredCount > 0) {
+    const filteredNames = [
+      ...new Set(
+        result.events
+          .filter((e) => !namesMatch(swimmerName, e.swimmerName))
+          .map((e) => e.swimmerName)
+      ),
+    ];
+    const warning = `Filtered ${filteredCount} event(s) for different swimmer(s): ${filteredNames.join(", ")}`;
+    console.log(warning);
+    result.warnings = [...(result.warnings || []), warning];
+  }
+
+  result.events = matchedEvents;
+  console.log(`Returning ${result.events.length} events after filtering`);
 
   return result;
 };
