@@ -18,6 +18,7 @@ Core features required for initial launch.
 | Swimmer Disambiguation | Combobox to select swimmer when same name has different team/age | Complete |
 | Error Handling | Clear messages for failed uploads/extraction, graceful "no events found" recovery | Complete |
 | Mobile Responsive | Works on phones (parents at meets) | Complete |
+| Analytics | Privacy-respecting usage tracking via Umami Cloud (page views, extractions, exports) | Complete |
 
 ## Version 1.1 (Polish)
 
