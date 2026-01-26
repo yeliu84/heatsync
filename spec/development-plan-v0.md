@@ -10,7 +10,9 @@
 | 3. Swimmer Disambiguation                   | Complete    | 2026-01-25 |
 | 3.5 UI Polish: Event Display & Selection    | Complete    | 2026-01-25 |
 | 4. Calendar Export                          | Complete    | 2026-01-25 |
-| 5. Polish & Launch                          | In Progress | -          |
+| 5. Polish & Launch                          | Complete    | 2026-01-26 |
+
+**🎉 v0 Development Plan Complete!**
 
 ---
 
@@ -228,7 +230,7 @@ Complete MVP - upload → search → export to calendar
 
 **Goal:** Production-ready MVP
 
-**Status:** In Progress
+**Status:** Complete
 
 ### Deployment Infrastructure (Complete)
 
@@ -335,3 +337,4 @@ No environment variables required. The webapp uses relative `/api` paths which a
 | 2026-01-26 | 5         | iOS Safari clipboard fix - Fallback for restricted clipboard API: focuses input + toast guidance for manual paste |
 | 2026-01-26 | 5         | Session date display - Added `sessionDate` to SwimEvent type, EventCard displays date with UTC timezone to avoid off-by-one errors |
 | 2026-01-26 | 5         | Analytics - Added Umami Cloud integration for privacy-respecting analytics (page views, extraction events, export events) |
+| 2026-01-26 | -         | **v0 Development Plan Complete** - All milestones finished, HeatSync MVP launched at https://heatsync.ai-builders.space/ |
