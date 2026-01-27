@@ -582,6 +582,7 @@ The Dockerfile uses a multi-stage build:
 | `OPENAI_API_KEY` | Yes | - | OpenAI API key |
 | `OPENAI_BASE_URL` | No | `https://api.openai.com/v1` | API endpoint |
 | `OPENAI_MODEL` | No | `gpt-5.2` | Model to use |
+| `SUPABASE_DATABASE_URL` | No | - | PostgreSQL connection string for caching (if not set, caching disabled) |
 
 ### AI Builder Space Deployment
 
