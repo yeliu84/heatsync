@@ -586,6 +586,10 @@ The Dockerfile uses a multi-stage build:
 
 ### AI Builder Space Deployment
 
+**Production URLs:**
+- Official: `https://heatsync.now` (Cloudflare Worker proxy)
+- Hosting: `https://heatsync.ai-builders.space` (actual deployment)
+
 HeatSync is designed for deployment to AI Builder Space:
 - Single container deployment
 - PORT injected by platform

@@ -29,12 +29,12 @@
   /**
    * Handle combobox selection change
    */
-  function handleChange(event: Event) {
+  const handleChange = (event: Event) => {
     const select = event.target as HTMLSelectElement;
     const selectedKey = select.value;
     const profile = $swimmerProfiles.find((p) => p.key === selectedKey);
     selectedProfile.set(profile || null);
-  }
+  };
 </script>
 
 {#if $needsDisambiguation}

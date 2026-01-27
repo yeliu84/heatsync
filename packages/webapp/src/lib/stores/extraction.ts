@@ -142,7 +142,7 @@ export const selectedEvents = derived(
 /**
  * Reset all stores to initial state
  */
-export function resetStores(): void {
+export const resetStores = (): void => {
   appState.set('upload');
   uploadedPdf.set(null);
   swimmerName.set('');
@@ -151,13 +151,13 @@ export function resetStores(): void {
   searchQuery.set('');
   selectedProfile.set(null);
   localExtractionResult.set(null);
-}
+};
 
 /**
  * Reset stores for a new search, preserving swimmer name.
  * Used when clicking "Start New Search" on result page.
  */
-export function resetForNewSearch(): void {
+export const resetForNewSearch = (): void => {
   appState.set('upload');
   uploadedPdf.set(null);
   // swimmerName is preserved
@@ -166,12 +166,12 @@ export function resetForNewSearch(): void {
   searchQuery.set('');
   selectedProfile.set(null);
   localExtractionResult.set(null);
-}
+};
 
 /**
  * Toggle event selection
  */
-export function toggleEventSelection(eventIndex: number): void {
+export const toggleEventSelection = (eventIndex: number): void => {
   selectedEventIds.update((ids) => {
     const newIds = new Set(ids);
     if (newIds.has(eventIndex)) {
@@ -181,30 +181,30 @@ export function toggleEventSelection(eventIndex: number): void {
     }
     return newIds;
   });
-}
+};
 
 /**
  * Select all events matching current search
  */
-export function selectAllFiltered(eventIndices: number[]): void {
+export const selectAllFiltered = (eventIndices: number[]): void => {
   selectedEventIds.update((ids) => {
     const newIds = new Set(ids);
     eventIndices.forEach((i) => newIds.add(i));
     return newIds;
   });
-}
+};
 
 /**
  * Clear all selections
  */
-export function clearSelections(): void {
+export const clearSelections = (): void => {
   selectedEventIds.set(new Set());
-}
+};
 
 /**
  * Select all events (used for initial auto-selection)
  */
-export function selectAllEvents(count: number): void {
+export const selectAllEvents = (count: number): void => {
   const indices = Array.from({ length: count }, (_, i) => i);
   selectedEventIds.set(new Set(indices));
-}
+};
