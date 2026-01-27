@@ -1,7 +1,7 @@
 import { eq, and } from 'drizzle-orm';
 import { getDb, isDatabaseConfigured, schema } from '@heatsync/backend/db';
 import type { ExtractionResult, SwimEvent } from '@heatsync/shared';
-import { normalizeSwimmerName } from '@heatsync/backend/utils/name';
+import { normalizeSwimmerName } from '@heatsync/shared/utils/name';
 
 // Base62 characters for short code generation
 const BASE62_CHARS = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';

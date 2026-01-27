@@ -2,6 +2,18 @@ import { writable, derived } from 'svelte/store';
 import type { AppState, ExtractionResult, UploadedPdf, SwimEvent } from '$lib/types';
 
 /**
+ * Special result code used when database is not configured.
+ * Results are stored in localExtractionResult instead of the database.
+ */
+export const LOCAL_RESULT_CODE = '-----';
+
+/**
+ * Temporary storage for extraction result when database is not configured.
+ * Used to pass data to result page via client-side navigation.
+ */
+export const localExtractionResult = writable<ExtractionResult | null>(null);
+
+/**
  * Unique swimmer profile for disambiguation
  * When multiple swimmers share the same name, we use team + age to differentiate
  */
@@ -138,6 +150,7 @@ export function resetStores(): void {
   selectedEventIds.set(new Set());
   searchQuery.set('');
   selectedProfile.set(null);
+  localExtractionResult.set(null);
 }
 
 /**
