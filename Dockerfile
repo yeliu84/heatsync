@@ -3,8 +3,8 @@ FROM oven/bun:1 AS builder
 
 WORKDIR /app
 
-# Copy package files
-COPY package.json bun.lock* ./
+# Copy package files and root tsconfig (needed for shared package build)
+COPY package.json bun.lock* tsconfig.json ./
 COPY packages/webapp/package.json ./packages/webapp/
 COPY packages/backend/package.json ./packages/backend/
 COPY packages/shared/package.json ./packages/shared/
