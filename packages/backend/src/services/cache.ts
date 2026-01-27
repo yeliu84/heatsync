@@ -465,6 +465,7 @@ export const getResultByCode = async (shortCode: string): Promise<ExtractionResu
     // Get the extraction result
     const extractionResult = await db
       .select({
+        swimmerNameDisplay: schema.extractionResults.swimmerNameDisplay,
         meetName: schema.extractionResults.meetName,
         sessionDate: schema.extractionResults.sessionDate,
         meetDateStart: schema.extractionResults.meetDateStart,
@@ -504,6 +505,7 @@ export const getResultByCode = async (shortCode: string): Promise<ExtractionResu
             }
           : undefined,
       venue: extraction.venue || undefined,
+      swimmerName: extraction.swimmerNameDisplay,
       events: (extraction.events as SwimEvent[]) || [],
       warnings: (extraction.warnings as string[]) || undefined,
     };

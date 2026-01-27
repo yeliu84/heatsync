@@ -26,6 +26,7 @@ export interface ExtractionResult {
     end: Date;
   };
   venue?: string;
+  swimmerName?: string; // The swimmer's name (included when loaded from cache/result link)
   events: SwimEvent[];
   warnings?: string[]; // e.g., "Could not parse times for Event 5"
 }
