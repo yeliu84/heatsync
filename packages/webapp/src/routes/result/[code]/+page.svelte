@@ -39,8 +39,24 @@
         return;
       }
 
+      // Parse date strings from JSON into Date objects
+      const data = {
+        ...result.data,
+        sessionDate: new Date(result.data.sessionDate),
+        meetDateRange: result.data.meetDateRange
+          ? {
+              start: new Date(result.data.meetDateRange.start),
+              end: new Date(result.data.meetDateRange.end),
+            }
+          : undefined,
+        events: result.data.events.map((event) => ({
+          ...event,
+          sessionDate: event.sessionDate ? new Date(event.sessionDate) : undefined,
+        })),
+      };
+
       // Load data into stores
-      extractionResult.set(result.data);
+      extractionResult.set(data);
 
       // Auto-select all events
       if (result.data.events.length > 0) {
@@ -79,7 +95,13 @@
   <a href="/" class="inline-block">
     <h1 class="text-3xl font-bold tracking-tight text-sky-900 sm:text-5xl">HeatSync</h1>
   </a>
-  <p class="mt-2 text-lg text-sky-600 sm:mt-3 sm:text-xl">Heat Sheet Results</p>
+  <p class="mt-2 text-lg text-sky-600 sm:mt-3 sm:text-xl">
+    {#if $extractionResult}
+      Events for {$extractionResult.swimmerName}
+    {:else}
+      Heat Sheet Results
+    {/if}
+  </p>
 </header>
 
 <!-- Main content -->
@@ -127,13 +149,14 @@
               year: 'numeric',
               month: 'long',
               day: 'numeric',
+              timeZone: 'UTC',
             })}
           </p>
         </div>
         <button
           type="button"
           onclick={handleCopyLink}
-          class="flex items-center gap-2 rounded-lg border border-sky-200 bg-sky-50 px-4 py-2 text-sm text-sky-700 transition-colors hover:bg-sky-100"
+          class="flex shrink-0 items-center gap-2 whitespace-nowrap rounded-lg border border-sky-200 bg-sky-50 px-4 py-2 text-sm text-sky-700 transition-colors hover:bg-sky-100"
         >
           {#if linkCopied}
             <svg class="h-4 w-4 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
