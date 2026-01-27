@@ -1,0 +1,40 @@
+name: Deploy to AI Builder Space
+
+on:
+  workflow_dispatch: # Manual trigger
+  push:
+    branches: [main] # Auto-deploy on main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to AI Builder Space
+        run: |
+          response=$(curl -s -w "\n%{http_code}" -X POST \
+            "https://space.ai-builders.com/backend/v1/deployments" \
+            -H "Authorization: Bearer ${{ secrets.AI_BUILDER_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            --data '{
+              "repo_url": "https://github.com/yeliu84/heatsync",
+              "service_name": "heatsync",
+              "branch": "main",
+              "env_vars": {
+                "OPENAI_API_KEY": "${{ secrets.OPENAI_API_KEY }}",
+                "OPENAI_MODEL": "${{ secrets.OPENAI_MODEL }}",
+                "SUPABASE_DATABASE_URL": "${{ secrets.SUPABASE_DATABASE_URL }}"
+              }
+            }')
+
+          http_code=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | sed '$d')
+
+          echo "Response: $body"
+          echo "HTTP Status: $http_code"
+
+          if [ "$http_code" -ge 400 ]; then
+            echo "Deployment failed!"
+            exit 1
+          fi
+
+          echo "Deployment triggered successfully!"
