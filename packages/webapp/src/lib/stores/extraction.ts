@@ -154,6 +154,21 @@ export function resetStores(): void {
 }
 
 /**
+ * Reset stores for a new search, preserving swimmer name.
+ * Used when clicking "Start New Search" on result page.
+ */
+export function resetForNewSearch(): void {
+  appState.set('upload');
+  uploadedPdf.set(null);
+  // swimmerName is preserved
+  extractionResult.set(null);
+  selectedEventIds.set(new Set());
+  searchQuery.set('');
+  selectedProfile.set(null);
+  localExtractionResult.set(null);
+}
+
+/**
  * Toggle event selection
  */
 export function toggleEventSelection(eventIndex: number): void {

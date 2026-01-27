@@ -9,7 +9,7 @@
     extractionResult,
     selectedEventIds,
     selectAllEvents,
-    resetStores,
+    resetForNewSearch,
     localExtractionResult,
     LOCAL_RESULT_CODE,
   } from '$lib/stores/extraction';
@@ -121,7 +121,7 @@
   };
 
   const handleStartNew = () => {
-    resetStores();
+    resetForNewSearch(); // Preserves swimmer name
     goto('/');
   };
 </script>
