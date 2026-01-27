@@ -13,6 +13,7 @@ HeatSync is an application that converts swim meet heat sheets into calendar eve
 - **Never commit directly to main** - the app is running in production
 - Always create a feature branch and open a PR for changes
 - Branch naming: `feature/<description>` or `fix/<description>`
+- Always use github MCP to carry out github related tasks, do not use `gh` command
 
 ## Code Style Guide
 

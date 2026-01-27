@@ -49,7 +49,7 @@ ENV OPENAI_MODEL=gpt-5.2
 
 # Runtime environment variables (must be provided at deployment):
 # - OPENAI_API_KEY: Required for AI extraction
-# - SUPABASE_DATABASE_URL: Optional, enables caching and result sharing
+# - SUPABASE_DATABASE_URL: Required to enable caching and result sharing
 
 # Expose port
 EXPOSE 8000
