@@ -1,6 +1,7 @@
 import { eq, and } from 'drizzle-orm';
-import { getDb, isDatabaseConfigured, schema } from '../db';
+import { getDb, isDatabaseConfigured, schema } from '@heatsync/backend/db';
 import type { ExtractionResult, SwimEvent } from '@heatsync/shared';
+import { normalizeSwimmerName } from '@heatsync/backend/utils/name';
 
 // Base62 characters for short code generation
 const BASE62_CHARS = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
@@ -20,7 +21,7 @@ const generateShortCode = (length = 8): string => {
 /**
  * Normalize swimmer name to lowercase for consistent cache lookups
  */
-const normalizeSwimmerName = (name: string): string => {
+const normalizeNameForLookup = (name: string): string => {
   return name.trim().toLowerCase();
 };
 
@@ -238,7 +239,7 @@ export const getExtractionResult = async (
 
   try {
     const db = getDb();
-    const normalizedName = normalizeSwimmerName(swimmerName);
+    const normalizedName = normalizeNameForLookup(swimmerName);
 
     const result = await db
       .select({
@@ -314,14 +315,14 @@ export const cacheExtractionResult = async (
 
   try {
     const db = getDb();
-    const normalizedName = normalizeSwimmerName(swimmerName);
+    const normalizedName = normalizeNameForLookup(swimmerName);
 
     const insertResult = await db
       .insert(schema.extractionResults)
       .values({
         pdfId,
         swimmerNameNormalized: normalizedName,
-        swimmerNameDisplay: swimmerName.trim(),
+        swimmerNameDisplay: normalizeSwimmerName(swimmerName).firstLast,
         meetName: result.meetName,
         sessionDate: result.sessionDate,
         meetDateStart: result.meetDateRange?.start || null,

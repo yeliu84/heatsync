@@ -108,11 +108,11 @@ export const countSwimmerOccurrences = (
     // Normalize name to "Last, First" format (as used in heat sheets)
     const lastFirstName = normalizeToLastFirst(swimmerName);
 
-    // Also try the original format for case-insensitive matching
-    const searchPatterns = [
+    // Deduplicate search patterns (in case input was already "Last, First" format)
+    const searchPatterns = [...new Set([
       lastFirstName.toLowerCase(),
       swimmerName.toLowerCase(),
-    ];
+    ])];
 
     let count = 0;
     const pages: number[] = [];
