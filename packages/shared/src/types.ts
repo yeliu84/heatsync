@@ -26,6 +26,7 @@ export interface ExtractionResult {
     end: Date;
   };
   venue?: string;
+  swimmerName?: string; // The swimmer's name (included when loaded from cache/result link)
   events: SwimEvent[];
   warnings?: string[]; // e.g., "Could not parse times for Event 5"
 }
@@ -71,6 +72,8 @@ export interface ExtractResponse {
   success: true;
   data: ExtractionResult;
   pageCount?: number;
+  resultUrl?: string;  // Shareable URL path like "/result/abc123xy"
+  cached?: boolean;    // Whether result came from cache
 }
 
 export interface ExtractErrorResponse {

@@ -51,17 +51,21 @@ extractRoutes.post('/', async (c) => {
     console.log(`Processing PDF: ${file.name} (${file.size} bytes)`);
     console.log(`Looking for swimmer: ${swimmerName}`);
 
-    // Convert to ArrayBuffer and upload directly to OpenAI
+    // Convert to ArrayBuffer
     const buffer = await file.arrayBuffer();
 
-    console.log('Uploading PDF to OpenAI...');
-    const extractionResult = await extractFromPdf(buffer, swimmerName);
+    // Extract with caching support
+    const { result, resultCode, cached } = await extractFromPdf(buffer, swimmerName, {
+      filename: file.name,
+    });
 
-    console.log(`Found ${extractionResult.events.length} events for ${swimmerName}`);
+    console.log(`Found ${result.events.length} events for ${swimmerName}${cached ? ' (cached)' : ''}`);
 
     const response: ExtractResponse = {
       success: true,
-      data: extractionResult,
+      data: result,
+      resultUrl: resultCode ? `/result/${resultCode}` : undefined,
+      cached,
     };
 
     return c.json(response);

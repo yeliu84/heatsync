@@ -29,10 +29,13 @@ Enhancements based on user feedback.
 | URL paste input | Allow users to paste a URL to a heat sheet PDF instead of uploading | Complete |
 | iOS Safari clipboard fix | Fallback for clipboard API restrictions on iOS Safari - focuses input and guides manual paste | Complete |
 | Session date display | EventCard shows session date (e.g., "Saturday, Jan 17") for each event | Complete |
+| Share extraction | Generate shareable link to extracted data (no PDF re-upload) - result links like `/result/abc123xy` | Complete |
+| PDF caching | Avoid re-uploading same PDF to OpenAI - uses MD5 checksum to detect duplicates | Complete |
+| Extraction caching | Instant results for previously extracted swimmer+PDF combinations | Complete |
+| Pre-processing accuracy | Count swimmer occurrences in PDF text to guide AI extraction | Complete |
 | Multi-swimmer search | Search for multiple swimmers at once (siblings) | Planned |
 | Google Calendar direct add | "Add to Google Calendar" button with pre-filled link | Planned |
 | Event time estimation | If times missing, estimate based on event order + avg duration | Planned |
-| Share extraction | Generate shareable link to extracted data (no PDF re-upload) | Planned |
 | Print view | Clean printable list of swimmer's events | Planned |
 
 ## Version 2.0 (Future)
