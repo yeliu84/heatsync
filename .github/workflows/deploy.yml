@@ -8,6 +8,7 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    environment: AI Builder Space
     steps:
       - name: Deploy to AI Builder Space
         run: |
