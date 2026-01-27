@@ -9,28 +9,28 @@
 
   let { event, selected = false, onToggle }: Props = $props();
 
-  function formatSeedTime(time?: string): string {
+  const formatSeedTime = (time?: string): string => {
     if (!time) return 'NT';
     return time;
-  }
+  };
 
   /**
    * Convert 24-hour format "HH:MM" to 12-hour format "H:MM AM/PM"
    */
-  function formatHeatTime(time24?: string): string {
+  const formatHeatTime = (time24?: string): string => {
     if (!time24) return '';
     const [hourStr, minute] = time24.split(':');
     const hour = parseInt(hourStr, 10);
     const period = hour >= 12 ? 'PM' : 'AM';
     const hour12 = hour % 12 || 12;
     return `${hour12}:${minute} ${period}`;
-  }
+  };
 
   /**
    * Format session date for display (e.g., "Saturday, Jan 17")
    * Uses UTC timezone to avoid local timezone shifting the date back a day
    */
-  function formatSessionDate(date?: Date): string {
+  const formatSessionDate = (date?: Date): string => {
     if (!date) return '';
     return new Date(date).toLocaleDateString('en-US', {
       weekday: 'long',
@@ -38,7 +38,7 @@
       day: 'numeric',
       timeZone: 'UTC',
     });
-  }
+  };
 </script>
 
 <button

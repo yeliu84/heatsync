@@ -38,7 +38,12 @@
     {
       question: 'Is my data stored anywhere?',
       answer:
-        "No. HeatSync processes your PDF in memory and doesn't store any files or personal information. Once you close the browser tab, all data is gone.",
+        "Yes. To provide faster results and enable shareable links, HeatSync saves your search results. When you search for a swimmer, the results are stored so that:\n\n• Future searches for the same swimmer in the same PDF load instantly\n• You can share results with others via a link\n\nStored data includes: PDF metadata (not the full PDF), swimmer name, meet information, and the events found. No account or personal contact information is collected.",
+    },
+    {
+      question: 'How do shareable links work?',
+      answer:
+        "When you find events for a swimmer, HeatSync generates a shareable link (like https://heatsync.now/result/abc123xy). You can copy this link and send it to others—they'll see the same results without needing to upload the PDF again. This is useful for sharing event schedules with family members or coaches.",
     },
     {
       question: "Why am I getting a 'Too many requests' error?",

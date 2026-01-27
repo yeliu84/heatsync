@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 HeatSync is an application that converts swim meet heat sheets into calendar events. The goal is to eliminate the manual process of printing heat sheets, highlighting events, and manually adding them to calendars. Users can find their events and sync them directly to their calendar.
 
-**Production URL:** https://heatsync.ai-builders.space/
+**Production URL:** https://heatsync.now (proxied via Cloudflare Worker to https://heatsync.ai-builders.space)
 
 ## Git Workflow
 
