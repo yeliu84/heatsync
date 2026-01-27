@@ -96,9 +96,13 @@ extractUrlRoutes.post('/', async (c) => {
     const buffer = await response.arrayBuffer();
     console.log(`Downloaded ${buffer.byteLength} bytes`);
 
+    // Extract filename from URL path (e.g., "heatsheet.pdf" from "https://example.com/path/heatsheet.pdf")
+    const filename = decodeURIComponent(parsedUrl.pathname.split('/').pop() || '') || undefined;
+
     // Extract with caching support
     const { result, resultCode, cached } = await extractFromPdf(buffer, body.swimmer, {
       sourceUrl: body.url,
+      filename,
     });
     console.log(`Found ${result.events.length} events for ${body.swimmer}${cached ? ' (cached)' : ''}`);
 
