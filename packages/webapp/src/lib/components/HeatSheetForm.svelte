@@ -1,5 +1,7 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
+  import { onMount } from 'svelte';
+  import { get } from 'svelte/store';
   import {
     uploadedPdf,
     appState,
@@ -22,6 +24,13 @@
   let extractionStatus = $state('');
   let pdfUrl = $state('');
   let localSwimmerName = $state('');
+
+  onMount(() => {
+    // Initialize from store (preserves name on back navigation)
+    localSwimmerName = get(swimmerName);
+    // Reset app state for fresh form interaction
+    appState.set('upload');
+  });
 
   const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
   const API_URL = '/api';
