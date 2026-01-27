@@ -5,6 +5,11 @@ import { serveStatic } from 'hono/bun';
 import { healthRoutes } from '@heatsync/backend/routes/health';
 import { extractRoutes } from '@heatsync/backend/routes/extract';
 import { extractUrlRoutes } from '@heatsync/backend/routes/extractUrl';
+import { resultRoutes } from '@heatsync/backend/routes/result';
+import { runMigrations } from '@heatsync/backend/services/migrations';
+
+// Run database migrations on startup
+await runMigrations();
 
 const app = new Hono();
 
@@ -70,6 +75,7 @@ api.use('/extractUrl/*', rateLimiter);
 
 api.route('/extract', extractRoutes);
 api.route('/extractUrl', extractUrlRoutes);
+api.route('/result', resultRoutes);
 
 // API error handling
 api.onError((err, c) => {

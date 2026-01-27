@@ -1,6 +1,16 @@
 import OpenAI from 'openai';
 import type { ExtractionResult } from '@heatsync/shared';
-import { renderPdfToImages } from './pdf';
+import { renderPdfToImages, countSwimmerOccurrences } from './pdf';
+import { calculateMD5 } from '../utils/hash';
+import {
+  getPdfByChecksum,
+  cachePdfFile,
+  updatePdfOpenAIFileId,
+  getExtractionResult,
+  cacheExtractionResult,
+  createResultLink,
+  type CachePdfMetadata,
+} from './cache';
 
 /**
  * Normalize swimmer name to consistent "First Last" format
@@ -44,15 +54,32 @@ const namesMatch = (requestedName: string, returnedName: string): boolean => {
 };
 
 /**
+ * Options for building extraction prompt
+ */
+interface ExtractionPromptOptions {
+  expectedEventCount?: number;  // From pre-processing swimmer occurrence count
+}
+
+/**
  * Build extraction prompt for finding a specific swimmer's events
  */
-const buildExtractionPrompt = (swimmerName: string): string => {
+const buildExtractionPrompt = (swimmerName: string, options: ExtractionPromptOptions = {}): string => {
   const { firstLast, lastFirst } = normalizeSwimmerName(swimmerName);
+  const { expectedEventCount } = options;
+
+  // Build expected count instruction if available
+  const countInstruction = expectedEventCount && expectedEventCount > 0
+    ? `\n\n** EXPECTED EVENT COUNT: ${expectedEventCount} **
+Based on text analysis, this swimmer appears ${expectedEventCount} time(s) in the heat sheet.
+You MUST find at least ${expectedEventCount} event(s) for this swimmer.
+If you find fewer events, re-scan the entire document more carefully - you may have missed some occurrences.
+`
+    : '';
 
   return `IMPORTANT: You MUST scan EVERY page of this heat sheet completely. Do NOT stop after finding some events - swimmers often appear in multiple events across different pages.
 
 Find ALL events for swimmer "${firstLast}" in this heat sheet. Return ONLY this JSON (no explanation):
-{"meetName":"string","sessionDate":"YYYY-MM-DD","meetDateRange":{"start":"YYYY-MM-DD","end":"YYYY-MM-DD"},"venue":"string|null","events":[{"eventNumber":1,"eventName":"string","heatNumber":1,"lane":1,"swimmerName":"First Last","age":11,"team":"ABC","seedTime":"1:23.45","heatStartTime":"HH:MM"}],"warnings":[]}
+{"meetName":"string","sessionDate":"YYYY-MM-DD","meetDateRange":{"start":"YYYY-MM-DD","end":"YYYY-MM-DD"},"venue":"string|null","events":[{"eventNumber":1,"eventName":"string","heatNumber":1,"lane":1,"swimmerName":"First Last","age":11,"team":"ABC","seedTime":"1:23.45","heatStartTime":"HH:MM"}],"warnings":[]}${countInstruction}
 
 NAME MATCHING (CRITICAL):
 - The swimmer's name is: "${firstLast}" (also written as "${lastFirst}")
@@ -162,14 +189,10 @@ const isGptModel = (model: string): boolean => {
 type MessageContent = OpenAI.Chat.Completions.ChatCompletionContentPart[];
 
 /**
- * Build message content for GPT models (direct PDF file upload)
+ * Upload PDF to OpenAI and return the file ID
  */
-const buildGptContent = async (
-  openai: OpenAI,
-  buffer: ArrayBuffer,
-  swimmerName: string,
-): Promise<MessageContent> => {
-  console.log('Using direct PDF file upload...');
+const uploadPdfToOpenAI = async (openai: OpenAI, buffer: ArrayBuffer): Promise<string> => {
+  console.log('Uploading PDF to OpenAI...');
 
   const file = await openai.files.create({
     file: new File([buffer], 'heatsheet.pdf', { type: 'application/pdf' }),
@@ -177,17 +200,31 @@ const buildGptContent = async (
   });
 
   console.log(`Uploaded PDF as file_id: ${file.id}`);
+  return file.id;
+};
 
+/**
+ * Build message content for GPT models (direct PDF file reference)
+ */
+const buildGptContent = (
+  fileId: string,
+  swimmerName: string,
+  promptOptions?: ExtractionPromptOptions,
+): MessageContent => {
   return [
-    { type: 'file', file: { file_id: file.id } },
-    { type: 'text', text: buildExtractionPrompt(swimmerName) },
+    { type: 'file', file: { file_id: fileId } },
+    { type: 'text', text: buildExtractionPrompt(swimmerName, promptOptions) },
   ];
 };
 
 /**
  * Build message content for non-GPT models (image rendering)
  */
-const buildImageContent = (buffer: ArrayBuffer, swimmerName: string): MessageContent => {
+const buildImageContent = (
+  buffer: ArrayBuffer,
+  swimmerName: string,
+  promptOptions?: ExtractionPromptOptions,
+): MessageContent => {
   console.log('Using PDF-to-image rendering...');
 
   const images = renderPdfToImages(buffer);
@@ -200,35 +237,134 @@ const buildImageContent = (buffer: ArrayBuffer, swimmerName: string): MessageCon
         image_url: { url, detail: 'high' },
       }),
     ),
-    { type: 'text', text: buildExtractionPrompt(swimmerName) },
+    { type: 'text', text: buildExtractionPrompt(swimmerName, promptOptions) },
   ];
 };
 
 /**
+ * Options for PDF extraction
+ */
+export interface ExtractOptions {
+  sourceUrl?: string;
+  filename?: string;
+}
+
+/**
+ * Result from extraction including caching metadata
+ */
+export interface ExtractResult {
+  result: ExtractionResult;
+  resultCode: string | null;  // Short code for result link
+  cached: boolean;            // Whether result came from cache
+}
+
+/**
  * Extract swim meet data for a specific swimmer from a PDF
  *
+ * Uses caching to avoid re-processing the same PDF and swimmer combination.
  * Uses direct PDF upload for GPT models, image rendering for others.
  *
  * @param buffer - PDF file content as ArrayBuffer
  * @param swimmerName - Name of the swimmer to search for
- * @returns Parsed extraction result with only that swimmer's events
+ * @param options - Additional options (URL, filename for caching)
+ * @returns Extraction result with caching metadata
  */
 export const extractFromPdf = async (
   buffer: ArrayBuffer,
   swimmerName: string,
-): Promise<ExtractionResult> => {
-  const openai = createOpenAIClient();
+  options: ExtractOptions = {},
+): Promise<ExtractResult> => {
   const model = Bun.env.OPENAI_MODEL || 'gpt-4o';
   const useGpt = isGptModel(model);
 
   console.log(`Processing PDF (${buffer.byteLength} bytes) with model: ${model}`);
   console.log(`Searching for swimmer: ${swimmerName}`);
 
-  // Build content based on model type
-  const content = useGpt
-    ? await buildGptContent(openai, buffer, swimmerName)
-    : buildImageContent(buffer, swimmerName);
+  // Step 1: Calculate MD5 checksum for cache lookup
+  const checksum = calculateMD5(buffer);
+  console.log(`PDF checksum: ${checksum}`);
 
+  // Step 2: Check if we have this PDF cached
+  let pdfCache = await getPdfByChecksum(checksum);
+  let pdfId = pdfCache?.id;
+
+  // Step 3: If PDF is cached, check for cached extraction result
+  if (pdfId) {
+    const cachedResult = await getExtractionResult(pdfId, swimmerName);
+    if (cachedResult) {
+      console.log('[Cache] Using cached extraction result');
+      // Get or create result link
+      const resultCode = await createResultLink(cachedResult.id);
+      return {
+        result: cachedResult.result,
+        resultCode,
+        cached: true,
+      };
+    }
+  }
+
+  // Step 4: Not cached - need to run extraction
+  const openai = createOpenAIClient();
+  let openaiFileId = pdfCache?.openaiFileId;
+
+  // Step 5: Get or create OpenAI file ID (for GPT models)
+  if (useGpt) {
+    if (!openaiFileId) {
+      // Need to upload PDF to OpenAI
+      openaiFileId = await uploadPdfToOpenAI(openai, buffer);
+
+      // Cache the PDF file info
+      if (pdfId) {
+        // PDF entry exists but OpenAI file expired, update it
+        await updatePdfOpenAIFileId(pdfId, openaiFileId);
+      } else {
+        // New PDF, create cache entry
+        const metadata: CachePdfMetadata = {
+          sourceUrl: options.sourceUrl,
+          filename: options.filename,
+          fileSizeBytes: buffer.byteLength,
+        };
+        const cached = await cachePdfFile(checksum, metadata, openaiFileId);
+        pdfId = cached?.id;
+      }
+    } else {
+      console.log(`[Cache] Using cached OpenAI file ID: ${openaiFileId}`);
+    }
+  } else if (!pdfId) {
+    // For non-GPT models, we still want to cache the PDF metadata (without OpenAI file ID)
+    const metadata: CachePdfMetadata = {
+      sourceUrl: options.sourceUrl,
+      filename: options.filename,
+      fileSizeBytes: buffer.byteLength,
+    };
+    const cached = await cachePdfFile(checksum, metadata, 'non-gpt-model');
+    pdfId = cached?.id;
+  }
+
+  // Step 6: Pre-process PDF to count swimmer occurrences (for accuracy)
+  let expectedEventCount: number | undefined;
+  try {
+    const occurrences = countSwimmerOccurrences(buffer, swimmerName);
+    if (occurrences.count > 0) {
+      expectedEventCount = occurrences.count;
+      console.log(
+        `[Pre-process] Swimmer "${swimmerName}" found ${occurrences.count} time(s) on pages: ${occurrences.pages.map((p) => p + 1).join(', ')}`,
+      );
+    } else {
+      console.log(`[Pre-process] Swimmer "${swimmerName}" not found in PDF text (may be a scanned PDF)`);
+    }
+  } catch (error) {
+    // Pre-processing failed (e.g., scanned PDF) - continue without expected count
+    console.log('[Pre-process] Text extraction failed, continuing without expected count');
+  }
+
+  // Step 7: Build content based on model type
+  const promptOptions: ExtractionPromptOptions = { expectedEventCount };
+  const content = useGpt
+    ? buildGptContent(openaiFileId!, swimmerName, promptOptions)
+    : buildImageContent(buffer, swimmerName, promptOptions);
+
+  // Step 8: Call OpenAI for extraction
   const response = await openai.chat.completions.create({
     model,
     messages: [{ role: 'user', content }],
@@ -276,5 +412,18 @@ export const extractFromPdf = async (
   result.events = matchedEvents;
   console.log(`Returning ${result.events.length} events after filtering`);
 
-  return result;
+  // Step 9: Cache the extraction result
+  let resultCode: string | null = null;
+  if (pdfId) {
+    const cached = await cacheExtractionResult(pdfId, swimmerName, result);
+    if (cached) {
+      resultCode = await createResultLink(cached.id);
+    }
+  }
+
+  return {
+    result,
+    resultCode,
+    cached: false,
+  };
 };

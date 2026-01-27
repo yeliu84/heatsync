@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { goto } from '$app/navigation';
   import {
     uploadedPdf,
     appState,
@@ -226,12 +227,20 @@
         throw new Error(result.error + (result.details ? `: ${result.details}` : ''));
       }
 
-      extractionResult.set(result.data);
-
       if (result.data.events.length > 0) {
         extractionStatus = `Found ${result.data.events.length} events!`;
-        selectAllEvents(result.data.events.length);
         trackExtractionSuccess(result.data.events.length);
+
+        // Navigate to result page if we have a result URL
+        if (result.resultUrl) {
+          extractionStatus = 'Redirecting to results...';
+          await goto(result.resultUrl);
+          return;
+        }
+
+        // Fallback: display results on current page (no Supabase configured)
+        extractionResult.set(result.data);
+        selectAllEvents(result.data.events.length);
         appState.set('search');
       } else {
         trackExtractionSuccess(0);

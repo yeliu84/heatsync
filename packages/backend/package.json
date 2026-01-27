@@ -4,16 +4,23 @@
   "type": "module",
   "scripts": {
     "dev": "bun run --watch src/index.ts",
-    "start": "bun run src/index.ts"
+    "start": "bun run src/index.ts",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "db:push": "drizzle-kit push",
+    "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
+    "@heatsync/shared": "workspace:*",
+    "drizzle-orm": "^0.45.1",
     "hono": "^4.x",
     "mupdf": "^1.x",
     "openai": "^4.x",
-    "@heatsync/shared": "workspace:*"
+    "postgres": "^3.4.8"
   },
   "devDependencies": {
     "@types/bun": "latest",
+    "drizzle-kit": "^0.31.8",
     "typescript": "^5.x"
   }
 }

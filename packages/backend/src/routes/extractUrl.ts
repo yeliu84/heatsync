@@ -96,14 +96,17 @@ extractUrlRoutes.post('/', async (c) => {
     const buffer = await response.arrayBuffer();
     console.log(`Downloaded ${buffer.byteLength} bytes`);
 
-    // Upload PDF directly to OpenAI for extraction
-    console.log('Uploading PDF to OpenAI...');
-    const extractionResult = await extractFromPdf(buffer, body.swimmer);
-    console.log(`Found ${extractionResult.events.length} events for ${body.swimmer}`);
+    // Extract with caching support
+    const { result, resultCode, cached } = await extractFromPdf(buffer, body.swimmer, {
+      sourceUrl: body.url,
+    });
+    console.log(`Found ${result.events.length} events for ${body.swimmer}${cached ? ' (cached)' : ''}`);
 
     const apiResponse: ExtractResponse = {
       success: true,
-      data: extractionResult,
+      data: result,
+      resultUrl: resultCode ? `/result/${resultCode}` : undefined,
+      cached,
     };
 
     return c.json(apiResponse);

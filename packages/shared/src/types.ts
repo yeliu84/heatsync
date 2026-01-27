@@ -71,6 +71,8 @@ export interface ExtractResponse {
   success: true;
   data: ExtractionResult;
   pageCount?: number;
+  resultUrl?: string;  // Shareable URL path like "/result/abc123xy"
+  cached?: boolean;    // Whether result came from cache
 }
 
 export interface ExtractErrorResponse {
