@@ -2,7 +2,7 @@ import OpenAI from 'openai';
 import type { ExtractionResult } from '@heatsync/shared';
 import { renderPdfToImages, countSwimmerOccurrences } from '@heatsync/backend/services/pdf';
 import { calculateMD5 } from '@heatsync/backend/utils/hash';
-import { normalizeSwimmerName } from '@heatsync/backend/utils/name';
+import { normalizeSwimmerName } from '@heatsync/shared/utils/name';
 import {
   getPdfByChecksum,
   cachePdfFile,
@@ -12,6 +12,7 @@ import {
   createResultLink,
   type CachePdfMetadata,
 } from '@heatsync/backend/services/cache';
+import { isDatabaseConfigured } from '@heatsync/backend/db';
 
 /**
  * Check if two swimmer names match (case-insensitive, format-agnostic)
@@ -246,36 +247,48 @@ export const extractFromPdf = async (
 ): Promise<ExtractResult> => {
   const model = Bun.env.OPENAI_MODEL || 'gpt-4o';
   const useGpt = isGptModel(model);
+  const cachingEnabled = isDatabaseConfigured();
 
   console.log(`Processing PDF (${buffer.byteLength} bytes) with model: ${model}`);
   console.log(`Searching for swimmer: ${swimmerName}`);
+  if (!cachingEnabled) {
+    console.log('[Cache] Database not configured, caching disabled');
+  }
 
-  // Step 1: Calculate MD5 checksum for cache lookup
-  const checksum = calculateMD5(buffer);
-  console.log(`PDF checksum: ${checksum}`);
+  // Cache-related variables (only used when caching is enabled)
+  let checksum: string | null = null;
+  let pdfId: string | undefined;
+  let openaiFileId: string | undefined;
 
-  // Step 2: Check if we have this PDF cached
-  let pdfCache = await getPdfByChecksum(checksum);
-  let pdfId = pdfCache?.id;
+  // Step 1-3: Check cache (only if caching is enabled)
+  if (cachingEnabled) {
+    // Calculate MD5 checksum for cache lookup
+    checksum = calculateMD5(buffer);
+    console.log(`PDF checksum: ${checksum}`);
 
-  // Step 3: If PDF is cached, check for cached extraction result
-  if (pdfId) {
-    const cachedResult = await getExtractionResult(pdfId, swimmerName);
-    if (cachedResult) {
-      console.log('[Cache] Using cached extraction result');
-      // Get or create result link
-      const resultCode = await createResultLink(cachedResult.id);
-      return {
-        result: cachedResult.result,
-        resultCode,
-        cached: true,
-      };
+    // Check if we have this PDF cached
+    const pdfCache = await getPdfByChecksum(checksum);
+    pdfId = pdfCache?.id;
+    openaiFileId = pdfCache?.openaiFileId ?? undefined;
+
+    // If PDF is cached, check for cached extraction result
+    if (pdfId) {
+      const cachedResult = await getExtractionResult(pdfId, swimmerName);
+      if (cachedResult) {
+        console.log('[Cache] Using cached extraction result');
+        // Get or create result link
+        const resultCode = await createResultLink(cachedResult.id);
+        return {
+          result: cachedResult.result,
+          resultCode,
+          cached: true,
+        };
+      }
     }
   }
 
   // Step 4: Not cached - need to run extraction
   const openai = createOpenAIClient();
-  let openaiFileId = pdfCache?.openaiFileId;
 
   // Step 5: Get or create OpenAI file ID (for GPT models)
   if (useGpt) {
@@ -283,24 +296,26 @@ export const extractFromPdf = async (
       // Need to upload PDF to OpenAI
       openaiFileId = await uploadPdfToOpenAI(openai, buffer);
 
-      // Cache the PDF file info
-      if (pdfId) {
-        // PDF entry exists but OpenAI file expired, update it
-        await updatePdfOpenAIFileId(pdfId, openaiFileId);
-      } else {
-        // New PDF, create cache entry
-        const metadata: CachePdfMetadata = {
-          sourceUrl: options.sourceUrl,
-          filename: options.filename,
-          fileSizeBytes: buffer.byteLength,
-        };
-        const cached = await cachePdfFile(checksum, metadata, openaiFileId);
-        pdfId = cached?.id;
+      // Cache the PDF file info (only if caching is enabled)
+      if (cachingEnabled && checksum) {
+        if (pdfId) {
+          // PDF entry exists but OpenAI file expired, update it
+          await updatePdfOpenAIFileId(pdfId, openaiFileId);
+        } else {
+          // New PDF, create cache entry
+          const metadata: CachePdfMetadata = {
+            sourceUrl: options.sourceUrl,
+            filename: options.filename,
+            fileSizeBytes: buffer.byteLength,
+          };
+          const cached = await cachePdfFile(checksum, metadata, openaiFileId);
+          pdfId = cached?.id;
+        }
       }
     } else {
       console.log(`[Cache] Using cached OpenAI file ID: ${openaiFileId}`);
     }
-  } else if (!pdfId) {
+  } else if (cachingEnabled && checksum && !pdfId) {
     // For non-GPT models, we still want to cache the PDF metadata (without OpenAI file ID)
     const metadata: CachePdfMetadata = {
       sourceUrl: options.sourceUrl,
@@ -382,9 +397,9 @@ export const extractFromPdf = async (
   result.events = matchedEvents;
   console.log(`Returning ${result.events.length} events after filtering`);
 
-  // Step 9: Cache the extraction result
+  // Step 9: Cache the extraction result (only if caching is enabled)
   let resultCode: string | null = null;
-  if (pdfId) {
+  if (cachingEnabled && pdfId) {
     const cached = await cacheExtractionResult(pdfId, swimmerName, result);
     if (cached) {
       resultCode = await createResultLink(cached.id);

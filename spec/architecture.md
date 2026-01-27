@@ -138,8 +138,7 @@ heatsync/
 │   │   │   │   ├── cache.ts       # PDF & extraction result caching
 │   │   │   │   └── migrations.ts  # Auto-run Drizzle migrations
 │   │   │   ├── utils/
-│   │   │   │   ├── hash.ts        # MD5 checksum for PDF deduplication
-│   │   │   │   └── name.ts        # Swimmer name normalization
+│   │   │   │   └── hash.ts        # MD5 checksum for PDF deduplication
 │   │   │   └── types/
 │   │   │       └── index.ts       # Backend-specific types
 │   │   ├── drizzle/               # SQL migrations
@@ -149,15 +148,18 @@ heatsync/
 │   │   ├── package.json
 │   │   ├── tsconfig.json
 │   │   └── .env.example
-│   └── shared/                    # Shared types package
+│   └── shared/                    # Shared types and utilities package
 │       ├── src/
-│       │   └── types.ts           # SwimEvent, ExtractionResult, etc.
+│       │   ├── types.ts           # SwimEvent, ExtractionResult, etc.
+│       │   └── utils/
+│       │       └── name.ts        # Swimmer name normalization
 │       ├── package.json
 │       └── tsconfig.json
 ├── spec/                          # Project documentation
 │   ├── architecture.md
 │   ├── features.md
-│   └── development-plan-v0.md
+│   ├── development-plan-v0.md
+│   └── development-plan-v1.md
 ├── package.json                   # Root workspace config
 ├── Dockerfile                     # Multi-stage Docker build
 ├── .dockerignore                  # Docker build exclusions

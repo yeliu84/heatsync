@@ -10,13 +10,17 @@
     selectedEventIds,
     selectAllEvents,
     resetStores,
+    localExtractionResult,
+    LOCAL_RESULT_CODE,
   } from '$lib/stores/extraction';
+  import { get } from 'svelte/store';
   import { toasts } from '$lib/stores/toast';
   import type { ExtractResponse, ExtractErrorResponse } from '$lib/types';
 
   let isLoading = $state(true);
   let error = $state<string | null>(null);
   let linkCopied = $state(false);
+  let isLocalResult = $state(false);
 
   const API_URL = '/api';
 
@@ -25,6 +29,38 @@
 
     if (!code) {
       error = 'Invalid result code';
+      isLoading = false;
+      return;
+    }
+
+    // Handle local (non-cached) results
+    if (code === LOCAL_RESULT_CODE) {
+      const localData = get(localExtractionResult);
+      if (!localData || !localData.events || localData.events.length === 0) {
+        // No local data, redirect to main page
+        goto('/');
+        return;
+      }
+
+      // Parse date strings from JSON into Date objects (same as API path)
+      const data = {
+        ...localData,
+        sessionDate: new Date(localData.sessionDate),
+        meetDateRange: localData.meetDateRange
+          ? {
+              start: new Date(localData.meetDateRange.start),
+              end: new Date(localData.meetDateRange.end),
+            }
+          : undefined,
+        events: localData.events.map((event) => ({
+          ...event,
+          sessionDate: event.sessionDate ? new Date(event.sessionDate) : undefined,
+        })),
+      };
+
+      isLocalResult = true;
+      extractionResult.set(data);
+      selectAllEvents(data.events.length);
       isLoading = false;
       return;
     }
@@ -153,33 +189,35 @@
             })}
           </p>
         </div>
-        <button
-          type="button"
-          onclick={handleCopyLink}
-          class="flex shrink-0 items-center gap-2 whitespace-nowrap rounded-lg border border-sky-200 bg-sky-50 px-4 py-2 text-sm text-sky-700 transition-colors hover:bg-sky-100"
-        >
-          {#if linkCopied}
-            <svg class="h-4 w-4 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M5 13l4 4L19 7"
-              />
-            </svg>
-            Copied!
-          {:else}
-            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
-              />
-            </svg>
-            Copy Link
-          {/if}
-        </button>
+        {#if !isLocalResult}
+          <button
+            type="button"
+            onclick={handleCopyLink}
+            class="flex shrink-0 items-center gap-2 whitespace-nowrap rounded-lg border border-sky-200 bg-sky-50 px-4 py-2 text-sm text-sky-700 transition-colors hover:bg-sky-100"
+          >
+            {#if linkCopied}
+              <svg class="h-4 w-4 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M5 13l4 4L19 7"
+                />
+              </svg>
+              Copied!
+            {:else}
+              <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
+                />
+              </svg>
+              Copy Link
+            {/if}
+          </button>
+        {/if}
       </div>
     </section>
 

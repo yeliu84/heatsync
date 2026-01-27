@@ -6,6 +6,10 @@
     ".": {
       "types": "./src/types.ts",
       "import": "./src/types.ts"
+    },
+    "./utils/name": {
+      "types": "./src/utils/name.ts",
+      "import": "./src/utils/name.ts"
     }
   },
   "devDependencies": {

@@ -33,6 +33,7 @@ Enhancements based on user feedback.
 | PDF caching | Avoid re-uploading same PDF to OpenAI - uses MD5 checksum to detect duplicates | Complete |
 | Extraction caching | Instant results for previously extracted swimmer+PDF combinations | Complete |
 | Pre-processing accuracy | Count swimmer occurrences in PDF text to guide AI extraction | Complete |
+| Consistent result UX | Results always display on `/result/` page, even without database - uses local storage fallback | Complete |
 | Multi-swimmer search | Search for multiple swimmers at once (siblings) | Planned |
 | Google Calendar direct add | "Add to Google Calendar" button with pre-filled link | Planned |
 | Event time estimation | If times missing, estimate based on event order + avg duration | Planned |

@@ -3,9 +3,9 @@
   import {
     uploadedPdf,
     appState,
-    extractionResult,
     swimmerName,
-    selectAllEvents,
+    localExtractionResult,
+    LOCAL_RESULT_CODE,
   } from '$lib/stores/extraction';
   import { toasts } from '$lib/stores/toast';
   import type { UploadedPdf, ExtractResponse, ExtractErrorResponse } from '$lib/types';
@@ -14,6 +14,7 @@
     trackExtractionSuccess,
     trackExtractionFailed,
   } from '$lib/utils/analytics';
+  import { normalizeSwimmerName } from '@heatsync/shared/utils/name';
 
   let isDragOver = $state(false);
   let fileInput = $state<HTMLInputElement | null>(null);
@@ -238,10 +239,15 @@
           return;
         }
 
-        // Fallback: display results on current page (no Supabase configured)
-        extractionResult.set(result.data);
-        selectAllEvents(result.data.events.length);
-        appState.set('search');
+        // Fallback: store locally and navigate to result page with special code
+        // Add swimmerName since it's not included in API response when caching is disabled
+        // Normalize to "First Last" format for consistent display
+        localExtractionResult.set({
+          ...result.data,
+          swimmerName: normalizeSwimmerName(localSwimmerName).firstLast,
+        });
+        extractionStatus = 'Redirecting to results...';
+        await goto(`/result/${LOCAL_RESULT_CODE}`);
       } else {
         trackExtractionSuccess(0);
         toasts.info(`No events found for "${localSwimmerName.trim()}"`);
