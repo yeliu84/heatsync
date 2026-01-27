@@ -328,19 +328,32 @@ export const extractFromPdf = async (
 
   // Step 6: Pre-process PDF to count swimmer occurrences (for accuracy)
   let expectedEventCount: number | undefined;
+  let textExtractionSucceeded = false;
   try {
     const occurrences = countSwimmerOccurrences(buffer, swimmerName);
+    textExtractionSucceeded = true;
     if (occurrences.count > 0) {
       expectedEventCount = occurrences.count;
       console.log(
         `[Pre-process] Swimmer "${swimmerName}" found ${occurrences.count} time(s) on pages: ${occurrences.pages.map((p) => p + 1).join(', ')}`,
       );
     } else {
-      console.log(`[Pre-process] Swimmer "${swimmerName}" not found in PDF text (may be a scanned PDF)`);
+      // Text extraction succeeded but swimmer not found - skip AI extraction
+      console.log(`[Pre-process] Swimmer "${swimmerName}" not found in PDF text, skipping AI extraction`);
+      return {
+        result: {
+          meetName: 'Unknown Meet',
+          sessionDate: new Date(),
+          events: [],
+          warnings: [`Swimmer "${swimmerName}" not found in heat sheet`],
+        },
+        resultCode: null,
+        cached: false,
+      };
     }
   } catch (error) {
-    // Pre-processing failed (e.g., scanned PDF) - continue without expected count
-    console.log('[Pre-process] Text extraction failed, continuing without expected count');
+    // Pre-processing failed (e.g., scanned PDF) - continue with AI extraction
+    console.log('[Pre-process] Text extraction failed (possibly scanned PDF), continuing with AI extraction');
   }
 
   // Step 7: Build content based on model type
