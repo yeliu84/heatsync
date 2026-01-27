@@ -4,20 +4,22 @@
 
 | Phase | Task | Status | Completed |
 |-------|------|--------|-----------|
-| 1. Supabase Setup | 1.1 Add Supabase client | Pending | - |
-| 1. Supabase Setup | 1.2 Create database tables | Pending | - |
-| 2. PDF Caching | 2.1 Add MD5 checksum utility | Pending | - |
-| 2. PDF Caching | 2.2 Create cache service | Pending | - |
-| 2. PDF Caching | 2.3 Integrate caching into extraction flow | Pending | - |
-| 3. Result Links | 3.1 Create result link service | Pending | - |
-| 3. Result Links | 3.2 Add result API endpoint | Pending | - |
-| 3. Result Links | 3.3 Modify extract routes to return result URL | Pending | - |
-| 3. Result Links | 3.4 Create result viewer page | Pending | - |
-| 3. Result Links | 3.5 Update frontend navigation flow | Pending | - |
-| 4. Accuracy | 4.1 Add text extraction to PDF service | Pending | - |
-| 4. Accuracy | 4.2 Add swimmer occurrence counter | Pending | - |
-| 4. Accuracy | 4.3 Enhance extraction prompt | Pending | - |
-| 4. Accuracy | 4.4 Integrate pre-processing | Pending | - |
+| 1. Database Setup | 1.1 Add Drizzle ORM + Supabase | Complete | 2026-01-26 |
+| 1. Database Setup | 1.2 Create database tables via migrations | Complete | 2026-01-26 |
+| 2. PDF Caching | 2.1 Add MD5 checksum utility | Complete | 2026-01-26 |
+| 2. PDF Caching | 2.2 Create cache service | Complete | 2026-01-26 |
+| 2. PDF Caching | 2.3 Integrate caching into extraction flow | Complete | 2026-01-26 |
+| 3. Result Links | 3.1 Create result link service | Complete | 2026-01-26 |
+| 3. Result Links | 3.2 Add result API endpoint | Complete | 2026-01-26 |
+| 3. Result Links | 3.3 Modify extract routes to return result URL | Complete | 2026-01-26 |
+| 3. Result Links | 3.4 Create result viewer page | Complete | 2026-01-26 |
+| 3. Result Links | 3.5 Update frontend navigation flow | Complete | 2026-01-26 |
+| 4. Accuracy | 4.1 Add text extraction to PDF service | Complete | 2026-01-26 |
+| 4. Accuracy | 4.2 Add swimmer occurrence counter | Complete | 2026-01-26 |
+| 4. Accuracy | 4.3 Enhance extraction prompt | Complete | 2026-01-26 |
+| 4. Accuracy | 4.4 Integrate pre-processing | Complete | 2026-01-26 |
+
+**All phases complete!**
 
 ---
 
@@ -92,30 +94,38 @@ CREATE INDEX idx_result_links_code ON result_links(short_code);
 
 ---
 
-## Phase 1: Supabase Setup
+## Phase 1: Database Setup (Drizzle ORM + Supabase)
 
-### Task 1.1: Add Supabase client
+### Task 1.1: Add Drizzle ORM + Supabase
 
-**Goal:** Set up Supabase client for database access
+**Goal:** Set up type-safe database access with Drizzle ORM
 
-- Install `@supabase/supabase-js` package
-- Create `/packages/backend/src/services/supabase.ts`
-- Add environment variables: `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`
-- Create Supabase client singleton
+**Implementation:**
+- Installed `drizzle-orm` and `postgres` packages
+- Created `/packages/backend/src/db/schema.ts` - Drizzle schema definitions
+- Created `/packages/backend/src/db/index.ts` - Database connection singleton
+- Created `/packages/backend/drizzle.config.ts` - Drizzle Kit configuration
+- Add environment variable: `SUPABASE_DATABASE_URL`
 
-**Files to modify:**
-- `packages/backend/package.json` - add supabase dependency
-- `packages/backend/src/services/supabase.ts` - new file
-- `.env.example` - document new env vars
+**Files created:**
+- `packages/backend/src/db/schema.ts` - Table definitions with TypeScript types
+- `packages/backend/src/db/index.ts` - `getDb()`, `isDatabaseConfigured()`, `closeDb()`
+- `packages/backend/drizzle.config.ts` - Migration configuration
 
 ---
 
-### Task 1.2: Create database tables
+### Task 1.2: Create database tables via migrations
 
-**Goal:** Set up database schema in Supabase
+**Goal:** Automatic database migrations on startup
 
-- Run SQL migrations in Supabase dashboard
-- Generate TypeScript types for tables
+**Implementation:**
+- Created `/packages/backend/src/services/migrations.ts` - Auto-run migrations on startup
+- Generated SQL migration: `drizzle/0000_initial_schema.sql`
+- Migrations run automatically when backend starts (if database configured)
+
+**Files created:**
+- `packages/backend/drizzle/0000_initial_schema.sql` - Initial schema migration
+- `packages/backend/src/services/migrations.ts` - Migration runner
 
 ---
 
@@ -385,10 +395,11 @@ FRONTEND FLOW:
 ## Environment Variables (New)
 
 ```bash
-# Supabase
-SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_SERVICE_KEY=eyJ...  # Service role key (backend only)
+# Supabase Database (Drizzle ORM)
+SUPABASE_DATABASE_URL=postgresql://postgres.[project-ref]:[password]@aws-0-[region].pooler.supabase.com:6543/postgres?sslmode=require
 ```
+
+**Note:** Uses the Supabase connection pooler (port 6543) with SSL required.
 
 ---
 
@@ -396,18 +407,23 @@ SUPABASE_SERVICE_KEY=eyJ...  # Service role key (backend only)
 
 | File | Changes |
 |------|---------|
-| `packages/backend/src/services/supabase.ts` | NEW - Supabase client |
+| `packages/backend/src/db/schema.ts` | NEW - Drizzle ORM schema definitions |
+| `packages/backend/src/db/index.ts` | NEW - Database connection singleton |
+| `packages/backend/drizzle.config.ts` | NEW - Drizzle Kit configuration |
+| `packages/backend/drizzle/0000_initial_schema.sql` | NEW - SQL migration |
+| `packages/backend/src/services/migrations.ts` | NEW - Auto-run migrations on startup |
 | `packages/backend/src/services/cache.ts` | NEW - Caching logic + result link creation |
 | `packages/backend/src/utils/hash.ts` | NEW - MD5 checksum |
+| `packages/backend/src/utils/name.ts` | NEW - Swimmer name normalization |
 | `packages/backend/src/routes/result.ts` | NEW - GET /api/result/:code endpoint |
 | `packages/backend/src/routes/extract.ts` | MODIFY - Add resultUrl to response |
 | `packages/backend/src/routes/extractUrl.ts` | MODIFY - Add resultUrl to response |
 | `packages/backend/src/services/pdf.ts` | ADD - Text extraction, occurrence counting |
 | `packages/backend/src/services/openai.ts` | MODIFY - Cache integration, prompt enhancement |
-| `packages/backend/src/index.ts` | MODIFY - Register result routes |
+| `packages/backend/src/index.ts` | MODIFY - Register result routes, run migrations |
 | `packages/webapp/src/routes/+page.svelte` | MODIFY - Navigate to resultUrl on success |
-| `packages/webapp/src/routes/result/[code]/+page.svelte` | NEW - Results view (reuses existing components) |
-| `packages/shared/src/types.ts` | ADD - Update ExtractResponse with resultUrl |
+| `packages/webapp/src/routes/result/[code]/+page.svelte` | NEW - Results view with Copy Link button |
+| `packages/shared/src/types.ts` | ADD - Update ExtractResponse with resultUrl, swimmerName |
 
 ---
 
@@ -427,3 +443,15 @@ SUPABASE_SERVICE_KEY=eyJ...  # Service role key (backend only)
 | Date | Phase | Notes |
 |------|-------|-------|
 | 2026-01-26 | - | Development plan v1 created |
+| 2026-01-26 | 1 | Implemented Drizzle ORM instead of raw Supabase client for type-safe queries |
+| 2026-01-26 | 1 | Auto-migrations on backend startup |
+| 2026-01-26 | 2 | PDF caching complete - avoids re-uploading same PDF to OpenAI |
+| 2026-01-26 | 2 | Extraction result caching complete - instant results for cached swimmer+PDF |
+| 2026-01-26 | 3 | Result links complete - shareable URLs like `/result/abc123xy` |
+| 2026-01-26 | 3 | Frontend auto-navigates to result page after extraction |
+| 2026-01-26 | 4 | Pre-processing complete - counts swimmer occurrences before AI extraction |
+| 2026-01-26 | 4 | Enhanced prompt includes expected event count |
+| 2026-01-26 | - | Bug fix: Deduplicate search patterns to prevent double-counting |
+| 2026-01-26 | - | Bug fix: Convert swimmer name to "First Last" format for display |
+| 2026-01-26 | - | Refactor: All imports use `@heatsync/backend` alias |
+| 2026-01-26 | **ALL** | **Development plan v1 complete!** |

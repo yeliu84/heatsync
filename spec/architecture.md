@@ -16,6 +16,8 @@ HeatSync is a web application that converts swim meet heat sheets (PDFs) into ca
 | PDF Processing | mupdf | 1.x |
 | Calendar | ics | Latest |
 | AI Integration | OpenAI SDK | 4.x |
+| Database | Supabase (PostgreSQL) | - |
+| ORM | Drizzle ORM | Latest |
 | Dev Environment | Nix + Flakes | - |
 
 ## Development Environment
@@ -61,6 +63,14 @@ The flake provides:
 │  PDF → PNG conversion    │     │   Vision + Chat completions  │
 │  Server-side rendering   │     │   Structured extraction      │
 └─────────────────────────┘     └─────────────────────────────┘
+              │
+              ▼
+┌─────────────────────────────────────────────────────────────┐
+│                  Supabase PostgreSQL                          │
+│  - pdf_files: Cache OpenAI file IDs by PDF checksum         │
+│  - extraction_results: Cache AI results by PDF + swimmer    │
+│  - result_links: Shareable short codes for results          │
+└─────────────────────────────────────────────────────────────┘
 ```
 
 ### Development (Dual-Server with Proxy)
@@ -85,8 +95,11 @@ heatsync/
 │   ├── webapp/                    # SvelteKit frontend
 │   │   ├── src/
 │   │   │   ├── routes/
-│   │   │   │   ├── +page.svelte   # Main app (upload → search → export)
-│   │   │   │   └── +layout.svelte # App shell, global styles
+│   │   │   │   ├── +page.svelte   # Main app (upload form)
+│   │   │   │   ├── +layout.svelte # App shell, global styles
+│   │   │   │   └── result/
+│   │   │   │       └── [code]/
+│   │   │   │           └── +page.svelte  # Shareable results page
 │   │   │   ├── lib/
 │   │   │   │   ├── components/
 │   │   │   │   │   ├── HeatSheetForm.svelte
@@ -111,15 +124,27 @@ heatsync/
 │   ├── backend/                   # Bun API server
 │   │   ├── src/
 │   │   │   ├── index.ts           # Entry point, Hono app, static serving
+│   │   │   ├── db/
+│   │   │   │   ├── schema.ts      # Drizzle ORM table definitions
+│   │   │   │   └── index.ts       # Database connection singleton
 │   │   │   ├── routes/
 │   │   │   │   ├── extract.ts     # POST /api/extract - PDF upload + AI
 │   │   │   │   ├── extractUrl.ts  # POST /api/extractUrl - URL + AI
+│   │   │   │   ├── result.ts      # GET /api/result/:code - Cached results
 │   │   │   │   └── health.ts      # GET /api/health
 │   │   │   ├── services/
-│   │   │   │   ├── pdf.ts         # mupdf PDF→image conversion
-│   │   │   │   └── openai.ts      # OpenAI API client
+│   │   │   │   ├── pdf.ts         # mupdf PDF→image, text extraction
+│   │   │   │   ├── openai.ts      # OpenAI API client + caching
+│   │   │   │   ├── cache.ts       # PDF & extraction result caching
+│   │   │   │   └── migrations.ts  # Auto-run Drizzle migrations
+│   │   │   ├── utils/
+│   │   │   │   ├── hash.ts        # MD5 checksum for PDF deduplication
+│   │   │   │   └── name.ts        # Swimmer name normalization
 │   │   │   └── types/
 │   │   │       └── index.ts       # Backend-specific types
+│   │   ├── drizzle/               # SQL migrations
+│   │   │   └── 0000_initial_schema.sql
+│   │   ├── drizzle.config.ts      # Drizzle Kit configuration
 │   │   ├── public/                # Static webapp (production build)
 │   │   ├── package.json
 │   │   ├── tsconfig.json
@@ -138,6 +163,64 @@ heatsync/
 ├── .dockerignore                  # Docker build exclusions
 └── .gitignore
 ```
+
+## Database Schema
+
+HeatSync uses Supabase PostgreSQL with Drizzle ORM for type-safe database access.
+
+### Tables
+
+**pdf_files** - Cache OpenAI file IDs by PDF checksum
+```sql
+CREATE TABLE pdf_files (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  checksum VARCHAR(32) NOT NULL UNIQUE,      -- MD5 of PDF content
+  source_url TEXT,                            -- URL if downloaded
+  filename VARCHAR(255),                      -- Original filename
+  file_size_bytes INTEGER NOT NULL,
+  openai_file_id VARCHAR(255),               -- Cached OpenAI file ID
+  openai_file_expires_at TIMESTAMPTZ,        -- Files expire ~30 days
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  last_accessed_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+**extraction_results** - Cache AI extraction results
+```sql
+CREATE TABLE extraction_results (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  pdf_id UUID NOT NULL REFERENCES pdf_files(id) ON DELETE CASCADE,
+  swimmer_name_normalized VARCHAR(255) NOT NULL,  -- lowercase for matching
+  swimmer_name_display VARCHAR(255) NOT NULL,     -- "First Last" format
+  meet_name VARCHAR(500) NOT NULL,
+  session_date TIMESTAMP NOT NULL,
+  meet_date_start TIMESTAMP,
+  meet_date_end TIMESTAMP,
+  venue VARCHAR(500),
+  events JSONB NOT NULL DEFAULT '[]',
+  warnings JSONB DEFAULT '[]',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(pdf_id, swimmer_name_normalized)
+);
+```
+
+**result_links** - Shareable short codes for results
+```sql
+CREATE TABLE result_links (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  short_code VARCHAR(12) NOT NULL UNIQUE,    -- Base62 code like "abc123xy"
+  extraction_id UUID NOT NULL REFERENCES extraction_results(id) ON DELETE CASCADE,
+  view_count INTEGER DEFAULT 0,
+  expires_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+### Caching Flow
+
+1. **PDF Upload**: Calculate MD5 checksum → check `pdf_files` for existing OpenAI file ID
+2. **Extraction**: Check `extraction_results` for cached result by PDF ID + swimmer name
+3. **Result Link**: Auto-generate 8-character base62 code, store in `result_links`
 
 ## Core Data Types
 
@@ -171,6 +254,7 @@ interface ExtractionResult {
     end: Date;
   };
   venue?: string;
+  swimmerName?: string;       // Included when loaded from cache/result link
   events: SwimEvent[];
   warnings?: string[];        // e.g., "Could not parse times for Event 5"
 }
@@ -200,7 +284,9 @@ Upload a PDF file for swimmer-specific extraction.
 ```json
 {
   "success": true,
-  "data": { /* ExtractionResult */ }
+  "data": { /* ExtractionResult */ },
+  "resultUrl": "/result/abc123xy",
+  "cached": false
 }
 ```
 
@@ -217,6 +303,24 @@ Extract from a PDF URL for a specific swimmer.
 ```
 
 **Response:** Same as `/api/extract`
+
+### GET /api/result/:code
+
+Retrieve cached extraction result by short code.
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "meetName": "Winter Championships 2026",
+    "sessionDate": "2026-01-18T00:00:00.000Z",
+    "venue": "Aquatic Center",
+    "swimmerName": "Jana Samiei",
+    "events": [ /* SwimEvent[] */ ]
+  }
+}
+```
 
 ### GET /api/health
 
@@ -348,6 +452,7 @@ heatsync/
 | `OPENAI_MODEL` | No | `gpt-5.2` | Model to use for extraction |
 | `OPENAI_BASE_URL` | No | `https://api.openai.com/v1` | API endpoint |
 | `PORT` | No | `8000` (prod) / `3001` (dev) | Server port |
+| `SUPABASE_DATABASE_URL` | No | - | PostgreSQL connection string for caching (if not set, caching disabled) |
 
 ## AI API Integration
 
@@ -490,12 +595,16 @@ HeatSync is designed for deployment to AI Builder Space:
 - No user data persistence (stateless design)
 - PDF processing happens server-side (backend handles all sensitive operations)
 
-## Rate Limiting
+## Rate Limiting & Caching
 
-If using a shared API key in production:
+**Caching (implemented):**
+- PDF files cached by MD5 checksum → avoids re-uploading to OpenAI
+- Extraction results cached by (PDF ID + swimmer name) → instant results for repeat queries
+- OpenAI file IDs expire after ~30 days, auto-refreshed on next request
+
+**Rate limiting (recommended for production):**
 - Implement request rate limiting on `/extract` endpoint
 - Consider per-session limits (e.g., 10 extractions per hour)
-- Cache extraction results by PDF hash to reduce duplicate requests
 
 ## Analytics
 
