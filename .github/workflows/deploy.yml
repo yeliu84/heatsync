@@ -4,6 +4,9 @@ on:
   workflow_dispatch: # Manual trigger
   push:
     branches: [main] # Auto-deploy on main
+    paths-ignore:
+      - 'packages/cloudflare-worker/**'
+      - '.github/workflows/deploy-worker.yml'
 
 jobs:
   deploy:

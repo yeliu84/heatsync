@@ -24,6 +24,8 @@
     "clean": "rm -rf packages/webapp/build packages/backend/public",
     "docker:build": "docker build -t heatsync .",
     "docker:run": "docker run -p 8000:8000 --env-file .env heatsync",
-    "format": "prettier packages/ --write"
+    "format": "prettier packages/ --write",
+    "worker:dev": "bun run --cwd packages/cloudflare-worker dev",
+    "worker:deploy": "bun run --cwd packages/cloudflare-worker deploy"
   }
 }
