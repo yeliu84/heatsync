@@ -8,6 +8,7 @@ COPY package.json bun.lock* tsconfig.json ./
 COPY packages/webapp/package.json ./packages/webapp/
 COPY packages/backend/package.json ./packages/backend/
 COPY packages/shared/package.json ./packages/shared/
+COPY packages/cloudflare-worker/package.json ./packages/cloudflare-worker/
 
 # Install dependencies
 RUN bun install --frozen-lockfile
@@ -16,6 +17,7 @@ RUN bun install --frozen-lockfile
 COPY packages/webapp ./packages/webapp
 COPY packages/backend ./packages/backend
 COPY packages/shared ./packages/shared
+COPY packages/cloudflare-worker ./packages/cloudflare-worker
 
 # Build webapp
 RUN bun run webapp:build
@@ -33,6 +35,7 @@ COPY package.json bun.lock* tsconfig.json ./
 COPY packages/webapp/package.json ./packages/webapp/
 COPY packages/backend/package.json ./packages/backend/
 COPY packages/shared/package.json ./packages/shared/
+COPY packages/cloudflare-worker/package.json ./packages/cloudflare-worker/
 
 # Install production dependencies only
 RUN bun install --frozen-lockfile --production
