@@ -17,18 +17,21 @@ CREATE TABLE processing_batches (
   total_pdfs INTEGER NOT NULL,
   completed_pdfs INTEGER DEFAULT 0,
   failed_pdfs INTEGER DEFAULT 0,
-  status VARCHAR(20) DEFAULT 'pending', -- pending|processing|completed|failed|partial
+  status VARCHAR(20) DEFAULT 'pending', -- pending|processing|completed|failed|partial|cancelled
   created_at TIMESTAMPTZ DEFAULT NOW(),
   started_at TIMESTAMPTZ,
   completed_at TIMESTAMPTZ,
+  expires_at TIMESTAMPTZ DEFAULT NOW() + INTERVAL '30 days', -- For cleanup
   client_ip VARCHAR(45),
-  -- Phase 5 addition:
+  last_event_id INTEGER DEFAULT 0,     -- For SSE reconnection
+  -- Phase 5 additions:
   notification_email VARCHAR(255),
   notification_sent_at TIMESTAMPTZ
 );
 
 CREATE INDEX idx_batches_status ON processing_batches(status);
 CREATE INDEX idx_batches_created ON processing_batches(created_at);
+CREATE INDEX idx_batches_expires ON processing_batches(expires_at);
 ```
 
 ### `batch_jobs` - Individual PDF jobs within a batch
@@ -42,12 +45,14 @@ CREATE TABLE batch_jobs (
   source_url TEXT,
   filename VARCHAR(255),
   file_checksum VARCHAR(32),
-  status VARCHAR(20) DEFAULT 'pending', -- pending|downloading|processing|completed|failed
-  progress_percent INTEGER DEFAULT 0,
+  status VARCHAR(20) DEFAULT 'pending', -- pending|downloading|processing|completed|failed|cancelled
+  stage VARCHAR(30),                   -- queued|downloading|uploading_to_ai|extracting|caching|done
   progress_message TEXT,
   extraction_id UUID REFERENCES extraction_results(id),
   result_code VARCHAR(12),
   error_message TEXT,
+  error_code VARCHAR(30),              -- For retry logic: RATE_LIMIT|TIMEOUT|NETWORK_ERROR|etc
+  retry_count INTEGER DEFAULT 0,
   cached BOOLEAN DEFAULT false,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   started_at TIMESTAMPTZ,
@@ -79,12 +84,15 @@ export const processingBatches = pgTable('processing_batches', {
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
   startedAt: timestamp('started_at', { withTimezone: true }),
   completedAt: timestamp('completed_at', { withTimezone: true }),
+  expiresAt: timestamp('expires_at', { withTimezone: true }),
   clientIp: varchar('client_ip', { length: 45 }),
+  lastEventId: integer('last_event_id').default(0).notNull(),
   notificationEmail: varchar('notification_email', { length: 255 }),
   notificationSentAt: timestamp('notification_sent_at', { withTimezone: true }),
 }, (table) => [
   index('idx_batches_status').on(table.status),
   index('idx_batches_created').on(table.createdAt),
+  index('idx_batches_expires').on(table.expiresAt),
 ]);
 
 export const batchJobs = pgTable('batch_jobs', {
@@ -96,11 +104,13 @@ export const batchJobs = pgTable('batch_jobs', {
   filename: varchar('filename', { length: 255 }),
   fileChecksum: varchar('file_checksum', { length: 32 }),
   status: varchar('status', { length: 20 }).default('pending').notNull(),
-  progressPercent: integer('progress_percent').default(0),
+  stage: varchar('stage', { length: 30 }),
   progressMessage: text('progress_message'),
   extractionId: uuid('extraction_id').references(() => extractionResults.id),
   resultCode: varchar('result_code', { length: 12 }),
   errorMessage: text('error_message'),
+  errorCode: varchar('error_code', { length: 30 }),
+  retryCount: integer('retry_count').default(0).notNull(),
   cached: boolean('cached').default(false),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
   startedAt: timestamp('started_at', { withTimezone: true }),

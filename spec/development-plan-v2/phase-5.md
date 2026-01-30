@@ -10,14 +10,20 @@
 
 ## Overview
 
-For batches that take longer than a few seconds, users can optionally enter their email to receive a notification when processing completes.
+For batches that take longer than expected, users can optionally enter their email to receive a notification when processing completes.
 
 **UX Flow:**
 1. User starts batch processing
-2. After 4 seconds, email prompt appears below progress
+2. After **first job completes OR 15 seconds elapsed** (whichever is first), email prompt appears
 3. User can enter email or dismiss
 4. On submit, email is stored with batch in DB
 5. When batch completes, send email with results link
+
+**Why this timing?**
+- 4 seconds felt abrupt (user just started watching)
+- 15 seconds gives user time to see progress
+- First job completion is a natural checkpoint
+- If batch is fast, prompt may never show (good!)
 
 ---
 
@@ -195,6 +201,34 @@ if (batch.notificationEmail && !batch.notificationSentAt) {
 ---
 
 ## Frontend Implementation
+
+### Email Prompt Timing Logic
+
+**In `ProgressPanel.svelte`:**
+
+```typescript
+let showPrompt = false;
+let processingStartTime = Date.now();
+
+$effect(() => {
+  if ($batchStatus === 'processing' && !showPrompt && !$emailSubmitted) {
+    // Show after 15 seconds
+    const timer = setTimeout(() => {
+      showPrompt = true;
+    }, 15000);
+    return () => clearTimeout(timer);
+  }
+});
+
+// Also show when first job completes (if > 5 seconds elapsed)
+$effect(() => {
+  const completed = $queueItems.filter(i => i.status === 'completed').length;
+  const elapsed = Date.now() - processingStartTime;
+  if (completed === 1 && elapsed > 5000 && !showPrompt) {
+    showPrompt = true;
+  }
+});
+```
 
 ### EmailPrompt Component
 

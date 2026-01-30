@@ -45,9 +45,145 @@ interface DiscoverResponse {
 ```typescript
 {
   success: false;
-  error: 'INVALID_URL' | 'FETCH_FAILED' | 'NO_PDFS_FOUND';
+  error: 'INVALID_URL' | 'BLOCKED_URL' | 'FETCH_FAILED' | 'NO_PDFS_FOUND' | 'PAGE_TOO_LARGE';
   message: string;
 }
+```
+
+---
+
+## SSRF Protection
+
+**Critical security consideration.** The crawler fetches arbitrary user-provided URLs, which can be exploited to:
+- Access internal services (SSRF attacks)
+- Scan internal networks
+- Access cloud metadata endpoints (AWS/GCP)
+
+### URL Validation
+
+```typescript
+import { URL } from 'url';
+
+const BLOCKED_HOSTS = [
+  'localhost',
+  '127.0.0.1',
+  '0.0.0.0',
+  '::1',
+  '[::1]',
+  'metadata.google.internal',
+  'metadata.google.com',
+  '169.254.169.254',           // AWS/GCP metadata
+  '169.254.170.2',             // AWS ECS metadata
+];
+
+const BLOCKED_HOST_PATTERNS = [
+  /\.internal$/i,              // *.internal
+  /\.local$/i,                 // *.local
+  /\.localhost$/i,             // *.localhost
+];
+
+export const isBlockedUrl = (urlString: string): { blocked: boolean; reason?: string } => {
+  try {
+    const url = new URL(urlString);
+    
+    // Block non-HTTP(S) protocols
+    if (!['http:', 'https:'].includes(url.protocol)) {
+      return { blocked: true, reason: 'Only HTTP/HTTPS URLs allowed' };
+    }
+    
+    // Block explicit internal hostnames
+    const hostname = url.hostname.toLowerCase();
+    if (BLOCKED_HOSTS.includes(hostname)) {
+      return { blocked: true, reason: 'Internal hostname not allowed' };
+    }
+    
+    // Block pattern-based hostnames
+    for (const pattern of BLOCKED_HOST_PATTERNS) {
+      if (pattern.test(hostname)) {
+        return { blocked: true, reason: 'Internal hostname not allowed' };
+      }
+    }
+    
+    // Block private IP ranges
+    const ipMatch = hostname.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+    if (ipMatch) {
+      const [, a, b, c, d] = ipMatch.map(Number);
+      
+      // 10.0.0.0/8
+      if (a === 10) return { blocked: true, reason: 'Private IP not allowed' };
+      
+      // 172.16.0.0/12
+      if (a === 172 && b >= 16 && b <= 31) return { blocked: true, reason: 'Private IP not allowed' };
+      
+      // 192.168.0.0/16
+      if (a === 192 && b === 168) return { blocked: true, reason: 'Private IP not allowed' };
+      
+      // 127.0.0.0/8
+      if (a === 127) return { blocked: true, reason: 'Loopback IP not allowed' };
+      
+      // 169.254.0.0/16 (link-local)
+      if (a === 169 && b === 254) return { blocked: true, reason: 'Link-local IP not allowed' };
+      
+      // 0.0.0.0/8
+      if (a === 0) return { blocked: true, reason: 'Invalid IP' };
+    }
+    
+    return { blocked: false };
+  } catch {
+    return { blocked: true, reason: 'Invalid URL format' };
+  }
+};
+```
+
+---
+
+## Fetch Limits
+
+Prevent resource exhaustion from large pages or slow servers:
+
+```typescript
+const CRAWL_TIMEOUT_MS = 10000;        // 10 second timeout
+const MAX_RESPONSE_SIZE = 10 * 1024 * 1024; // 10MB max page size
+const MAX_REDIRECTS = 5;
+
+export const safeFetch = async (url: string): Promise<Response> => {
+  // Validate URL first
+  const { blocked, reason } = isBlockedUrl(url);
+  if (blocked) {
+    throw new Error(reason || 'URL blocked');
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), CRAWL_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(url, {
+      headers: { 
+        'User-Agent': 'HeatSync/2.0 (https://heatsync.now; swim meet heat sheet finder)',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      },
+      signal: controller.signal,
+      redirect: 'follow',
+    });
+
+    // Check response size
+    const contentLength = parseInt(response.headers.get('content-length') || '0');
+    if (contentLength > MAX_RESPONSE_SIZE) {
+      throw new Error(`Page too large: ${(contentLength / 1024 / 1024).toFixed(1)}MB exceeds ${MAX_RESPONSE_SIZE / 1024 / 1024}MB limit`);
+    }
+
+    // Verify final URL after redirects isn't blocked
+    const finalUrl = response.url;
+    const { blocked: finalBlocked, reason: finalReason } = isBlockedUrl(finalUrl);
+    if (finalBlocked) {
+      throw new Error(`Redirect to blocked URL: ${finalReason}`);
+    }
+
+    return response;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+};
 ```
 
 ---
@@ -56,11 +192,10 @@ interface DiscoverResponse {
 
 ### Step 1: Fetch Page HTML
 ```typescript
-const response = await fetch(url, {
-  headers: {
-    'User-Agent': 'HeatSync/2.0 (https://heatsync.now)',
-  },
-});
+const response = await safeFetch(url);
+if (!response.ok) {
+  throw new Error(`Failed to fetch: ${response.status} ${response.statusText}`);
+}
 const html = await response.text();
 ```
 
@@ -133,7 +268,14 @@ const uniquePdfs = [...new Map(pdfs.map(p => [p.url, p])).values()];
 const enriched = await Promise.all(
   pdfs.map(async (pdf) => {
     try {
-      const head = await fetch(pdf.url, { method: 'HEAD', signal: AbortSignal.timeout(3000) });
+      // Validate PDF URL too
+      const { blocked } = isBlockedUrl(pdf.url);
+      if (blocked) return pdf;
+
+      const head = await fetch(pdf.url, { 
+        method: 'HEAD', 
+        signal: AbortSignal.timeout(3000) 
+      });
       const size = parseInt(head.headers.get('content-length') || '0');
       return { ...pdf, size };
     } catch {
@@ -151,6 +293,7 @@ const enriched = await Promise.all(
 
 ```typescript
 import * as cheerio from 'cheerio';
+import { isBlockedUrl, safeFetch } from './urlValidation';
 
 interface DiscoveredHeatsheet {
   url: string;
@@ -164,107 +307,107 @@ interface CrawlResult {
 }
 
 export const discoverHeatsheets = async (url: string): Promise<CrawlResult> => {
-  // 1. Fetch HTML
-  const response = await fetch(url, {
-    headers: { 'User-Agent': 'HeatSync/2.0' },
-  });
-
-  if (!response.ok) {
-    throw new Error(`Failed to fetch: ${response.status}`);
+  // 1. Validate URL
+  const { blocked, reason } = isBlockedUrl(url);
+  if (blocked) {
+    throw new Error(reason || 'URL not allowed');
   }
 
+  // 2. Fetch HTML
+  const response = await safeFetch(url);
   const html = await response.text();
   const $ = cheerio.load(html);
 
-  // 2. Detect platform
+  // 3. Detect platform
   const platform = detectPlatform(url);
 
-  // 3. Extract meet name
+  // 4. Extract meet name
   const meetName = extractMeetName($, platform);
 
-  // 4. Extract PDF links
+  // 5. Extract PDF links
   const pdfLinks = extractPdfLinks($, url, platform);
 
-  // 5. Infer names from link text/context
-  const heatsheets = pdfLinks.map(link => ({
+  // 6. Filter out any blocked URLs in the results
+  const safePdfLinks = pdfLinks.filter(link => !isBlockedUrl(link.url).blocked);
+
+  // 7. Infer names from link text/context
+  const heatsheets = safePdfLinks.map(link => ({
     url: link.url,
     name: inferName(link) || 'Heat Sheet',
   }));
 
-  // 6. Enrich with file sizes (optional)
+  // 8. Enrich with file sizes (optional)
   const enriched = await enrichWithSizes(heatsheets);
 
   return { meetName, heatsheets: enriched };
 };
 ```
 
+### File: `packages/backend/src/services/urlValidation.ts`
+
+Contains `isBlockedUrl()` and `safeFetch()` from above.
+
 ### File: `packages/backend/src/routes/discover.ts`
 
 ```typescript
 import { Hono } from 'hono';
 import { discoverHeatsheets } from '@heatsync/backend/services/crawler';
+import { isBlockedUrl } from '@heatsync/backend/services/urlValidation';
 
 export const discoverRoutes = new Hono();
 
 discoverRoutes.post('/discover-heatsheets', async (c) => {
   const { url } = await c.req.json();
 
-  // Validate URL
-  try {
-    const parsed = new URL(url);
-    if (!['http:', 'https:'].includes(parsed.protocol)) {
-      return c.json({ success: false, error: 'INVALID_URL', message: 'URL must be HTTP or HTTPS' }, 400);
-    }
-  } catch {
-    return c.json({ success: false, error: 'INVALID_URL', message: 'Invalid URL format' }, 400);
+  // Validate URL format
+  if (!url || typeof url !== 'string') {
+    return c.json({ success: false, error: 'INVALID_URL', message: 'URL is required' }, 400);
+  }
+
+  // Check for blocked URLs
+  const { blocked, reason } = isBlockedUrl(url);
+  if (blocked) {
+    return c.json({ success: false, error: 'BLOCKED_URL', message: reason || 'URL not allowed' }, 400);
   }
 
   try {
     const result = await discoverHeatsheets(url);
 
     if (result.heatsheets.length === 0) {
-      return c.json({ success: false, error: 'NO_PDFS_FOUND', message: 'No heat sheet PDFs found on this page' }, 404);
+      return c.json({ 
+        success: false, 
+        error: 'NO_PDFS_FOUND', 
+        message: 'No heat sheet PDFs found on this page. Try a different URL or add PDFs manually.' 
+      }, 404);
     }
 
     return c.json({ success: true, ...result });
   } catch (error) {
-    return c.json({ success: false, error: 'FETCH_FAILED', message: error.message }, 500);
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    
+    if (message.includes('timeout') || message.includes('abort')) {
+      return c.json({ success: false, error: 'FETCH_FAILED', message: 'Request timed out. The page took too long to load.' }, 504);
+    }
+    if (message.includes('too large')) {
+      return c.json({ success: false, error: 'PAGE_TOO_LARGE', message }, 413);
+    }
+    
+    return c.json({ success: false, error: 'FETCH_FAILED', message }, 500);
   }
 });
 ```
 
 ---
 
-## Platform-Specific Notes
-
-### SwimTopia
-- PDFs usually in `/files/` directory
-- Meet name in `.meet-header` or `h1`
-- Session info often in link text
-
-### TeamUnify
-- PDFs linked from event pages
-- May need to follow links to find PDFs
-- Meet name in page title or header
-
-### Active.com
-- PDFs in "Documents" section
-- Often has advertisements mixed in
-- May require scrolling/pagination
-
-### Generic Sites
-- Scan all `<a>` tags for `.pdf` links
-- Filter by keywords: heat, sheet, psych, timeline, program
-
----
-
 ## Tasks
 
 - [ ] Add `cheerio` dependency: `bun add cheerio`
+- [ ] Create `packages/backend/src/services/urlValidation.ts`
 - [ ] Create `packages/backend/src/services/crawler.ts`
 - [ ] Create `packages/backend/src/routes/discover.ts`
 - [ ] Register discover route in `packages/backend/src/index.ts`
 - [ ] Add types to `packages/shared/src/types.ts`
+- [ ] Test SSRF protection with internal URLs
 - [ ] Test with real swim meet URLs
 
 ---
@@ -273,6 +416,7 @@ discoverRoutes.post('/discover-heatsheets', async (c) => {
 
 | File | Description |
 |------|-------------|
+| `packages/backend/src/services/urlValidation.ts` | URL validation and SSRF protection |
 | `packages/backend/src/services/crawler.ts` | HTML parsing and PDF discovery logic |
 | `packages/backend/src/routes/discover.ts` | API endpoint handler |
 
@@ -289,7 +433,7 @@ discoverRoutes.post('/discover-heatsheets', async (c) => {
 ## Verification
 
 ```bash
-# Test with SwimTopia
+# Test with valid URL
 curl -X POST http://localhost:3001/api/discover-heatsheets \
   -H "Content-Type: application/json" \
   -d '{"url": "https://swimtopia.com/example-meet"}'
@@ -304,11 +448,26 @@ curl -X POST http://localhost:3001/api/discover-heatsheets \
   ]
 }
 
+# Test SSRF protection - should be blocked
+curl -X POST http://localhost:3001/api/discover-heatsheets \
+  -H "Content-Type: application/json" \
+  -d '{"url": "http://localhost:8080"}'
+# Expected: { "success": false, "error": "BLOCKED_URL" }
+
+curl -X POST http://localhost:3001/api/discover-heatsheets \
+  -H "Content-Type: application/json" \
+  -d '{"url": "http://169.254.169.254/latest/meta-data/"}'
+# Expected: { "success": false, "error": "BLOCKED_URL" }
+
+curl -X POST http://localhost:3001/api/discover-heatsheets \
+  -H "Content-Type: application/json" \
+  -d '{"url": "http://192.168.1.1"}'
+# Expected: { "success": false, "error": "BLOCKED_URL" }
+
 # Test with invalid URL
 curl -X POST http://localhost:3001/api/discover-heatsheets \
   -H "Content-Type: application/json" \
   -d '{"url": "not-a-url"}'
-
 # Expected: { "success": false, "error": "INVALID_URL" }
 ```
 
@@ -316,11 +475,12 @@ curl -X POST http://localhost:3001/api/discover-heatsheets \
 
 ## Edge Cases
 
-1. **No PDFs found**: Return empty array with helpful message
+1. **No PDFs found**: Return helpful message suggesting manual entry
 2. **Page requires JavaScript**: May not work with static fetch (document limitation)
-3. **PDFs behind authentication**: Will fail to access
-4. **Rate limiting**: Implement delay between requests if crawling multiple pages
-5. **Large pages**: Set response size limits
+3. **PDFs behind authentication**: Will fail to access - suggest manual entry
+4. **Large pages**: Reject with clear error message
+5. **Redirect to internal URL**: Block after redirect validation
+6. **IPv6 addresses**: Handle both IPv4 and IPv6
 
 ---
 
