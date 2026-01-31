@@ -25,7 +25,10 @@ Instead of manually finding and entering each PDF link, user enters the swim mee
 
 **Request:**
 ```typescript
-{ url: string }
+{ 
+  url: string;
+  usePlaywright?: boolean;  // Optional: use headless browser for JS-rendered pages
+}
 ```
 
 **Response:**
@@ -33,6 +36,7 @@ Instead of manually finding and entering each PDF link, user enters the swim mee
 interface DiscoverResponse {
   success: true;
   meetName?: string;           // Extracted meet name if found
+  platform?: string;           // Detected platform (swimtopia, teamunify, etc.)
   heatsheets: Array<{
     url: string;               // Direct PDF link
     name: string;              // Inferred name (e.g., "Session 1 - Prelims")
@@ -45,8 +49,9 @@ interface DiscoverResponse {
 ```typescript
 {
   success: false;
-  error: 'INVALID_URL' | 'BLOCKED_URL' | 'FETCH_FAILED' | 'NO_PDFS_FOUND' | 'PAGE_TOO_LARGE';
+  error: 'INVALID_URL' | 'BLOCKED_URL' | 'FETCH_FAILED' | 'NO_PDFS_FOUND' | 'PAGE_TOO_LARGE' | 'REQUIRES_JAVASCRIPT';
   message: string;
+  hint?: string;  // Helpful suggestion for user
 }
 ```
 
@@ -59,7 +64,7 @@ interface DiscoverResponse {
 - Scan internal networks
 - Access cloud metadata endpoints (AWS/GCP)
 
-### URL Validation
+### File: `packages/backend/src/services/urlValidation.ts`
 
 ```typescript
 import { URL } from 'url';
@@ -74,15 +79,23 @@ const BLOCKED_HOSTS = [
   'metadata.google.com',
   '169.254.169.254',           // AWS/GCP metadata
   '169.254.170.2',             // AWS ECS metadata
+  'instance-data',             // Azure metadata
 ];
 
 const BLOCKED_HOST_PATTERNS = [
   /\.internal$/i,              // *.internal
   /\.local$/i,                 // *.local
   /\.localhost$/i,             // *.localhost
+  /\.corp$/i,                  // *.corp
+  /\.lan$/i,                   // *.lan
 ];
 
-export const isBlockedUrl = (urlString: string): { blocked: boolean; reason?: string } => {
+export interface UrlValidationResult {
+  blocked: boolean;
+  reason?: string;
+}
+
+export const isBlockedUrl = (urlString: string): UrlValidationResult => {
   try {
     const url = new URL(urlString);
     
@@ -128,39 +141,61 @@ export const isBlockedUrl = (urlString: string): { blocked: boolean; reason?: st
       if (a === 0) return { blocked: true, reason: 'Invalid IP' };
     }
     
+    // Block IPv6 private ranges (simplified)
+    if (hostname.startsWith('[')) {
+      const ipv6 = hostname.slice(1, -1).toLowerCase();
+      if (ipv6.startsWith('fc') || ipv6.startsWith('fd') || ipv6.startsWith('fe80')) {
+        return { blocked: true, reason: 'Private IPv6 not allowed' };
+      }
+    }
+    
     return { blocked: false };
   } catch {
     return { blocked: true, reason: 'Invalid URL format' };
   }
 };
-```
 
----
+/**
+ * Safe fetch with SSRF protection, timeouts, and size limits
+ */
+export const safeFetch = async (
+  url: string,
+  options: {
+    timeoutMs?: number;
+    maxSizeBytes?: number;
+    method?: 'GET' | 'HEAD';
+  } = {}
+): Promise<Response> => {
+  const {
+    timeoutMs = 10_000,
+    maxSizeBytes = 10 * 1024 * 1024, // 10MB
+    method = 'GET',
+  } = options;
 
-## Fetch Limits
-
-Prevent resource exhaustion from large pages or slow servers:
-
-```typescript
-const CRAWL_TIMEOUT_MS = 10000;        // 10 second timeout
-const MAX_RESPONSE_SIZE = 10 * 1024 * 1024; // 10MB max page size
-const MAX_REDIRECTS = 5;
-
-export const safeFetch = async (url: string): Promise<Response> => {
-  // Validate URL first
+  // Validate URL
   const { blocked, reason } = isBlockedUrl(url);
   if (blocked) {
     throw new Error(reason || 'URL blocked');
   }
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), CRAWL_TIMEOUT_MS);
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
     const response = await fetch(url, {
-      headers: { 
-        'User-Agent': 'HeatSync/2.0 (https://heatsync.now; swim meet heat sheet finder)',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      method,
+      headers: {
+        // Mimic a real browser to avoid bot detection
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'none',
+        'Sec-Fetch-User': '?1',
       },
       signal: controller.signal,
       redirect: 'follow',
@@ -168,8 +203,8 @@ export const safeFetch = async (url: string): Promise<Response> => {
 
     // Check response size
     const contentLength = parseInt(response.headers.get('content-length') || '0');
-    if (contentLength > MAX_RESPONSE_SIZE) {
-      throw new Error(`Page too large: ${(contentLength / 1024 / 1024).toFixed(1)}MB exceeds ${MAX_RESPONSE_SIZE / 1024 / 1024}MB limit`);
+    if (contentLength > maxSizeBytes) {
+      throw new Error(`Page too large: ${(contentLength / 1024 / 1024).toFixed(1)}MB exceeds limit`);
     }
 
     // Verify final URL after redirects isn't blocked
@@ -188,106 +223,7 @@ export const safeFetch = async (url: string): Promise<Response> => {
 
 ---
 
-## Crawling Strategy
-
-### Step 1: Fetch Page HTML
-```typescript
-const response = await safeFetch(url);
-if (!response.ok) {
-  throw new Error(`Failed to fetch: ${response.status} ${response.statusText}`);
-}
-const html = await response.text();
-```
-
-### Step 2: Extract PDF Links
-
-**Primary patterns (high confidence):**
-```typescript
-// Direct PDF links
-/<a[^>]+href=["']([^"']+\.pdf)["'][^>]*>/gi
-
-// Links with heat sheet keywords
-/heat|sheet|psych|timeline|program|schedule/i
-```
-
-**Link text patterns:**
-```typescript
-// Common naming patterns
-/session\s*\d/i
-/day\s*\d/i
-/prelims?|finals?/i
-/morning|afternoon|evening/i
-/friday|saturday|sunday/i
-```
-
-### Step 3: Platform-Specific Patterns
-
-```typescript
-const PLATFORM_PATTERNS = {
-  swimtopia: {
-    urlMatch: /swimtopia\.com/i,
-    pdfSelector: 'a[href*="/files/"]',
-    meetNameSelector: 'h1.meet-name, .meet-header h1',
-  },
-  teamunify: {
-    urlMatch: /teamunify\.com/i,
-    pdfSelector: 'a[href*="document"], a[href$=".pdf"]',
-    meetNameSelector: '.meet-name, #meet-title',
-  },
-  active: {
-    urlMatch: /active\.com/i,
-    pdfSelector: '.documents a[href$=".pdf"]',
-    meetNameSelector: 'h1.event-title',
-  },
-  generic: {
-    urlMatch: /.*/,
-    pdfSelector: 'a[href$=".pdf"]',
-    meetNameSelector: 'h1, title',
-  },
-};
-```
-
-### Step 4: Normalize and Deduplicate
-
-```typescript
-const normalizeUrl = (href: string, baseUrl: string): string => {
-  if (href.startsWith('http')) return href;
-  if (href.startsWith('//')) return `https:${href}`;
-  if (href.startsWith('/')) return new URL(href, baseUrl).href;
-  return new URL(href, baseUrl).href;
-};
-
-// Deduplicate by URL
-const uniquePdfs = [...new Map(pdfs.map(p => [p.url, p])).values()];
-```
-
-### Step 5: Enrich with Metadata
-
-```typescript
-// Optional: Get file sizes via HEAD requests (parallel, with timeout)
-const enriched = await Promise.all(
-  pdfs.map(async (pdf) => {
-    try {
-      // Validate PDF URL too
-      const { blocked } = isBlockedUrl(pdf.url);
-      if (blocked) return pdf;
-
-      const head = await fetch(pdf.url, { 
-        method: 'HEAD', 
-        signal: AbortSignal.timeout(3000) 
-      });
-      const size = parseInt(head.headers.get('content-length') || '0');
-      return { ...pdf, size };
-    } catch {
-      return pdf; // Skip size if HEAD fails
-    }
-  })
-);
-```
-
----
-
-## Implementation
+## Crawler Implementation
 
 ### File: `packages/backend/src/services/crawler.ts`
 
@@ -295,17 +231,192 @@ const enriched = await Promise.all(
 import * as cheerio from 'cheerio';
 import { isBlockedUrl, safeFetch } from './urlValidation';
 
-interface DiscoveredHeatsheet {
+export interface DiscoveredHeatsheet {
   url: string;
   name: string;
   size?: number;
 }
 
-interface CrawlResult {
+export interface CrawlResult {
   meetName?: string;
+  platform?: string;
   heatsheets: DiscoveredHeatsheet[];
 }
 
+// Platform detection patterns
+const PLATFORMS = {
+  swimtopia: {
+    urlMatch: /swimtopia\.com/i,
+    pdfSelector: 'a[href*="/files/"], a[href$=".pdf"]',
+    meetNameSelector: 'h1.meet-name, .meet-header h1, h1',
+  },
+  teamunify: {
+    urlMatch: /teamunify\.com|swimmingrank\.com/i,
+    pdfSelector: 'a[href*="document"], a[href$=".pdf"]',
+    meetNameSelector: '.meet-name, #meet-title, h1',
+  },
+  active: {
+    urlMatch: /active\.com/i,
+    pdfSelector: '.documents a[href$=".pdf"], a[href$=".pdf"]',
+    meetNameSelector: 'h1.event-title, h1',
+  },
+  swimconnection: {
+    urlMatch: /swimconnection\.com/i,
+    pdfSelector: 'a[href$=".pdf"]',
+    meetNameSelector: '.meet-name, h1',
+  },
+  generic: {
+    urlMatch: /.*/,
+    pdfSelector: 'a[href$=".pdf"], a[href*=".pdf?"]',
+    meetNameSelector: 'h1, title',
+  },
+};
+
+/**
+ * Detect platform from URL
+ */
+const detectPlatform = (url: string): keyof typeof PLATFORMS => {
+  for (const [name, config] of Object.entries(PLATFORMS)) {
+    if (name !== 'generic' && config.urlMatch.test(url)) {
+      return name as keyof typeof PLATFORMS;
+    }
+  }
+  return 'generic';
+};
+
+/**
+ * Normalize PDF URL (handle relative paths, query strings, etc.)
+ */
+const normalizePdfUrl = (href: string, baseUrl: string): string | null => {
+  try {
+    let url: URL;
+    
+    if (href.startsWith('http://') || href.startsWith('https://')) {
+      url = new URL(href);
+    } else if (href.startsWith('//')) {
+      url = new URL(`https:${href}`);
+    } else {
+      url = new URL(href, baseUrl);
+    }
+    
+    // Remove fragments
+    url.hash = '';
+    
+    // Validate the resulting URL
+    if (isBlockedUrl(url.href).blocked) {
+      return null;
+    }
+    
+    return url.href;
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Infer a readable name from link context
+ */
+const inferName = (
+  $: cheerio.CheerioAPI,
+  link: cheerio.Element,
+  href: string
+): string => {
+  // Try link text first
+  const linkText = $(link).text().trim();
+  if (linkText && linkText.length > 2 && linkText.length < 100) {
+    return linkText;
+  }
+  
+  // Try title attribute
+  const title = $(link).attr('title');
+  if (title) {
+    return title;
+  }
+  
+  // Try parent context
+  const parentText = $(link).parent().text().trim();
+  if (parentText && parentText.length > 2 && parentText.length < 100) {
+    return parentText;
+  }
+  
+  // Fall back to filename
+  const filename = href.split('/').pop()?.split('?')[0] || 'Heat Sheet';
+  return filename.replace(/\.pdf$/i, '').replace(/[_-]/g, ' ');
+};
+
+/**
+ * Check if a link looks like a heat sheet (not a random PDF)
+ */
+const isLikelyHeatSheet = (href: string, text: string): boolean => {
+  const combined = `${href} ${text}`.toLowerCase();
+  
+  const heatSheetPatterns = [
+    /heat/i,
+    /sheet/i,
+    /psych/i,
+    /timeline/i,
+    /program/i,
+    /session/i,
+    /prelim/i,
+    /final/i,
+    /schedule/i,
+    /entries/i,
+  ];
+  
+  const excludePatterns = [
+    /waiver/i,
+    /registration/i,
+    /application/i,
+    /flyer/i,
+    /map/i,
+    /hotel/i,
+    /parking/i,
+    /volunteer/i,
+  ];
+  
+  // Exclude non-heat-sheet PDFs
+  if (excludePatterns.some(p => p.test(combined))) {
+    return false;
+  }
+  
+  // Include if matches heat sheet patterns
+  if (heatSheetPatterns.some(p => p.test(combined))) {
+    return true;
+  }
+  
+  // Include generic PDFs (might be heat sheets)
+  return true;
+};
+
+/**
+ * Get file sizes for PDFs via HEAD requests
+ */
+const enrichWithSizes = async (
+  heatsheets: DiscoveredHeatsheet[]
+): Promise<DiscoveredHeatsheet[]> => {
+  const results = await Promise.allSettled(
+    heatsheets.map(async (sheet) => {
+      try {
+        const response = await safeFetch(sheet.url, {
+          method: 'HEAD',
+          timeoutMs: 3000,
+        });
+        const size = parseInt(response.headers.get('content-length') || '0');
+        return { ...sheet, size };
+      } catch {
+        return sheet;
+      }
+    })
+  );
+  
+  return results.map((r, i) => 
+    r.status === 'fulfilled' ? r.value : heatsheets[i]
+  );
+};
+
+/**
+ * Discover heat sheets from a meet URL
+ */
 export const discoverHeatsheets = async (url: string): Promise<CrawlResult> => {
   // 1. Validate URL
   const { blocked, reason } = isBlockedUrl(url);
@@ -313,86 +424,203 @@ export const discoverHeatsheets = async (url: string): Promise<CrawlResult> => {
     throw new Error(reason || 'URL not allowed');
   }
 
-  // 2. Fetch HTML
+  // 2. Detect platform
+  const platform = detectPlatform(url);
+  const config = PLATFORMS[platform];
+  console.log(`[Crawler] Platform detected: ${platform}`);
+
+  // 3. Fetch HTML
   const response = await safeFetch(url);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch: ${response.status} ${response.statusText}`);
+  }
+  
   const html = await response.text();
+  
+  // 4. Check for JavaScript-heavy pages
+  if (html.includes('__NEXT_DATA__') || html.includes('window.__INITIAL_STATE__')) {
+    console.log('[Crawler] Page appears to use JavaScript rendering');
+    // Could add Playwright fallback here
+  }
+  
   const $ = cheerio.load(html);
 
-  // 3. Detect platform
-  const platform = detectPlatform(url);
+  // 5. Extract meet name
+  let meetName: string | undefined;
+  const meetNameEl = $(config.meetNameSelector).first();
+  if (meetNameEl.length) {
+    meetName = meetNameEl.text().trim();
+    if (meetName.length > 200) meetName = meetName.slice(0, 200);
+  }
 
-  // 4. Extract meet name
-  const meetName = extractMeetName($, platform);
+  // 6. Extract PDF links
+  const pdfLinks: { url: string; name: string }[] = [];
+  const seenUrls = new Set<string>();
+  
+  $(config.pdfSelector).each((_, el) => {
+    const href = $(el).attr('href');
+    if (!href) return;
+    
+    const normalizedUrl = normalizePdfUrl(href, url);
+    if (!normalizedUrl) return;
+    
+    // Deduplicate
+    if (seenUrls.has(normalizedUrl)) return;
+    seenUrls.add(normalizedUrl);
+    
+    const name = inferName($, el, href);
+    
+    // Filter to likely heat sheets
+    if (!isLikelyHeatSheet(normalizedUrl, name)) {
+      console.log(`[Crawler] Skipping non-heat-sheet: ${name}`);
+      return;
+    }
+    
+    pdfLinks.push({ url: normalizedUrl, name });
+  });
 
-  // 5. Extract PDF links
-  const pdfLinks = extractPdfLinks($, url, platform);
+  console.log(`[Crawler] Found ${pdfLinks.length} PDF link(s)`);
 
-  // 6. Filter out any blocked URLs in the results
-  const safePdfLinks = pdfLinks.filter(link => !isBlockedUrl(link.url).blocked);
+  // 7. Enrich with file sizes
+  const heatsheets = await enrichWithSizes(pdfLinks);
 
-  // 7. Infer names from link text/context
-  const heatsheets = safePdfLinks.map(link => ({
-    url: link.url,
-    name: inferName(link) || 'Heat Sheet',
-  }));
+  return { meetName, platform, heatsheets };
+};
 
-  // 8. Enrich with file sizes (optional)
-  const enriched = await enrichWithSizes(heatsheets);
-
-  return { meetName, heatsheets: enriched };
+/**
+ * Discover heat sheets using Playwright (for JS-rendered pages)
+ * This is optional and requires Playwright to be installed
+ */
+export const discoverHeatsheetsWithPlaywright = async (url: string): Promise<CrawlResult> => {
+  // Lazy import to avoid bundling Playwright when not used
+  const { chromium } = await import('playwright');
+  
+  const browser = await chromium.launch({ 
+    headless: true,
+    args: ['--no-sandbox', '--disable-setuid-sandbox'],
+  });
+  
+  try {
+    const page = await browser.newPage();
+    await page.goto(url, { 
+      waitUntil: 'networkidle',
+      timeout: 30_000,
+    });
+    
+    const html = await page.content();
+    await browser.close();
+    
+    // Parse with cheerio (same logic as above)
+    const $ = cheerio.load(html);
+    // ... same extraction logic
+    
+    return { meetName: undefined, platform: 'playwright', heatsheets: [] };
+  } finally {
+    await browser.close();
+  }
 };
 ```
 
-### File: `packages/backend/src/services/urlValidation.ts`
+---
 
-Contains `isBlockedUrl()` and `safeFetch()` from above.
+## Route Handler
 
 ### File: `packages/backend/src/routes/discover.ts`
 
 ```typescript
 import { Hono } from 'hono';
-import { discoverHeatsheets } from '@heatsync/backend/services/crawler';
+import { discoverHeatsheets, discoverHeatsheetsWithPlaywright } from '@heatsync/backend/services/crawler';
 import { isBlockedUrl } from '@heatsync/backend/services/urlValidation';
 
 export const discoverRoutes = new Hono();
 
 discoverRoutes.post('/discover-heatsheets', async (c) => {
-  const { url } = await c.req.json();
+  const body = await c.req.json();
+  const { url, usePlaywright = false } = body;
+
+  // Validate URL presence
+  if (!url || typeof url !== 'string') {
+    return c.json({ 
+      success: false, 
+      error: 'INVALID_URL', 
+      message: 'URL is required',
+      hint: 'Enter the URL of the swim meet website',
+    }, 400);
+  }
 
   // Validate URL format
-  if (!url || typeof url !== 'string') {
-    return c.json({ success: false, error: 'INVALID_URL', message: 'URL is required' }, 400);
+  try {
+    new URL(url);
+  } catch {
+    return c.json({ 
+      success: false, 
+      error: 'INVALID_URL', 
+      message: 'Invalid URL format',
+      hint: 'Make sure the URL starts with http:// or https://',
+    }, 400);
   }
 
   // Check for blocked URLs
   const { blocked, reason } = isBlockedUrl(url);
   if (blocked) {
-    return c.json({ success: false, error: 'BLOCKED_URL', message: reason || 'URL not allowed' }, 400);
+    return c.json({ 
+      success: false, 
+      error: 'BLOCKED_URL', 
+      message: reason || 'URL not allowed',
+    }, 400);
   }
 
   try {
-    const result = await discoverHeatsheets(url);
+    const usePlaywrightEnabled = usePlaywright && process.env.USE_PLAYWRIGHT_CRAWLER === 'true';
+    
+    const result = usePlaywrightEnabled
+      ? await discoverHeatsheetsWithPlaywright(url)
+      : await discoverHeatsheets(url);
 
     if (result.heatsheets.length === 0) {
       return c.json({ 
         success: false, 
         error: 'NO_PDFS_FOUND', 
-        message: 'No heat sheet PDFs found on this page. Try a different URL or add PDFs manually.' 
+        message: 'No heat sheet PDFs found on this page.',
+        hint: 'Try the direct link to the heat sheets page, or add PDF URLs manually.',
       }, 404);
     }
 
-    return c.json({ success: true, ...result });
+    return c.json({ 
+      success: true, 
+      meetName: result.meetName,
+      platform: result.platform,
+      heatsheets: result.heatsheets,
+    });
+    
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
+    console.error(`[Discover] Error crawling ${url}:`, message);
     
     if (message.includes('timeout') || message.includes('abort')) {
-      return c.json({ success: false, error: 'FETCH_FAILED', message: 'Request timed out. The page took too long to load.' }, 504);
-    }
-    if (message.includes('too large')) {
-      return c.json({ success: false, error: 'PAGE_TOO_LARGE', message }, 413);
+      return c.json({ 
+        success: false, 
+        error: 'FETCH_FAILED', 
+        message: 'Request timed out. The page took too long to load.',
+        hint: 'The website might be slow or blocking automated requests.',
+      }, 504);
     }
     
-    return c.json({ success: false, error: 'FETCH_FAILED', message }, 500);
+    if (message.includes('too large')) {
+      return c.json({ 
+        success: false, 
+        error: 'PAGE_TOO_LARGE', 
+        message,
+        hint: 'Try a more specific page with just the heat sheet links.',
+      }, 413);
+    }
+    
+    return c.json({ 
+      success: false, 
+      error: 'FETCH_FAILED', 
+      message,
+      hint: 'Check the URL and try again, or add PDF URLs manually.',
+    }, 500);
   }
 });
 ```
@@ -408,7 +636,9 @@ discoverRoutes.post('/discover-heatsheets', async (c) => {
 - [ ] Register discover route in `packages/backend/src/index.ts`
 - [ ] Add types to `packages/shared/src/types.ts`
 - [ ] Test SSRF protection with internal URLs
-- [ ] Test with real swim meet URLs
+- [ ] Test with real swim meet URLs (SwimTopia, TeamUnify)
+- [ ] Test with JavaScript-heavy pages
+- [ ] Consider adding Playwright for JS rendering (optional)
 
 ---
 
@@ -433,15 +663,16 @@ discoverRoutes.post('/discover-heatsheets', async (c) => {
 ## Verification
 
 ```bash
-# Test with valid URL
+# Test with valid swim meet URL
 curl -X POST http://localhost:3001/api/discover-heatsheets \
   -H "Content-Type: application/json" \
-  -d '{"url": "https://swimtopia.com/example-meet"}'
+  -d '{"url": "https://www.swimtopia.com/meets/winter-championships"}'
 
 # Expected response:
 {
   "success": true,
   "meetName": "Winter Championships 2026",
+  "platform": "swimtopia",
   "heatsheets": [
     { "url": "https://...", "name": "Session 1 - Friday Prelims", "size": 2456789 },
     { "url": "https://...", "name": "Session 2 - Friday Finals", "size": 1834567 }
@@ -469,18 +700,38 @@ curl -X POST http://localhost:3001/api/discover-heatsheets \
   -H "Content-Type: application/json" \
   -d '{"url": "not-a-url"}'
 # Expected: { "success": false, "error": "INVALID_URL" }
+
+# Test with page that has no PDFs
+curl -X POST http://localhost:3001/api/discover-heatsheets \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://example.com"}'
+# Expected: { "success": false, "error": "NO_PDFS_FOUND", "hint": "..." }
 ```
 
 ---
 
-## Edge Cases
+## Known Limitations
 
-1. **No PDFs found**: Return helpful message suggesting manual entry
-2. **Page requires JavaScript**: May not work with static fetch (document limitation)
-3. **PDFs behind authentication**: Will fail to access - suggest manual entry
-4. **Large pages**: Reject with clear error message
-5. **Redirect to internal URL**: Block after redirect validation
-6. **IPv6 addresses**: Handle both IPv4 and IPv6
+1. **JavaScript-rendered pages**: Cheerio can't execute JavaScript. Pages that load content dynamically won't work without Playwright.
+   - **Mitigation**: Add optional Playwright mode, document limitation clearly
+
+2. **Authentication-required pages**: Can't access PDFs behind login.
+   - **Mitigation**: Clear error message suggesting manual entry
+
+3. **Bot detection**: Some sites block automated requests.
+   - **Mitigation**: Use realistic browser headers, consider rotating user agents
+
+4. **Rate limiting**: Some sites may rate limit requests.
+   - **Mitigation**: Cache results, implement backoff
+
+---
+
+## Future Improvements
+
+1. **Playwright integration**: Add optional headless browser for JS-heavy sites
+2. **Platform-specific scrapers**: More refined extraction for common platforms
+3. **Caching**: Cache discovered PDFs for a short period
+4. **Session cookie support**: Allow user to provide cookies for authenticated pages
 
 ---
 

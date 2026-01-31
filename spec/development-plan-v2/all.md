@@ -7,8 +7,10 @@ Enable users to upload multiple PDF heat sheets at once, with real-time progress
 **Key Architectural Decisions:**
 - **SSE over WebSocket** - Simpler, unidirectional (server→client), auto-reconnect built-in
 - **Decoupled processing** - Batch processing runs independently of SSE connection (survives disconnects)
-- **In-process job queue** - No external dependencies (no Redis/pg-boss), processing via async workers
+- **Postgres-backed job queue** - Jobs stored in DB, polling worker with `FOR UPDATE SKIP LOCKED` (survives restarts, no Redis needed)
 - **Batch-based API** - Single endpoint creates batch, SSE streams progress
+- **Temp file storage** - Uploaded files persisted to disk for async processing
+- **Global concurrency control** - Limit concurrent AI calls across all batches (DB-based counting)
 
 ---
 
@@ -22,7 +24,8 @@ Enable users to upload multiple PDF heat sheets at once, with real-time progress
 ```sql
 CREATE TABLE processing_batches (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  swimmer_name VARCHAR(255) NOT NULL,
+  swimmer_name_normalized VARCHAR(255) NOT NULL,  -- lowercase for matching
+  swimmer_name_display VARCHAR(255) NOT NULL,     -- original case for display
   total_pdfs INTEGER NOT NULL,
   completed_pdfs INTEGER DEFAULT 0,
   failed_pdfs INTEGER DEFAULT 0,
@@ -31,7 +34,10 @@ CREATE TABLE processing_batches (
   started_at TIMESTAMPTZ,
   completed_at TIMESTAMPTZ,
   expires_at TIMESTAMPTZ,              -- For cleanup (default: 30 days from creation)
+  processing_timeout_at TIMESTAMPTZ,   -- For stuck batch detection
+  worker_heartbeat TIMESTAMPTZ,        -- Last worker activity
   client_ip VARCHAR(45),
+  user_agent TEXT,
   last_event_id INTEGER DEFAULT 0,     -- For SSE reconnection
   -- Phase 5 additions:
   notification_email VARCHAR(255),
@@ -48,6 +54,7 @@ CREATE TABLE batch_jobs (
   source_type VARCHAR(10) NOT NULL, -- 'file' | 'url'
   source_url TEXT,
   filename VARCHAR(255),
+  temp_file_path TEXT,              -- Path to temp file (for uploads)
   file_checksum VARCHAR(32),
   status VARCHAR(20) DEFAULT 'pending', -- pending|downloading|processing|completed|failed|cancelled
   stage VARCHAR(30),                   -- queued|downloading|uploading_to_ai|extracting|caching|done
@@ -86,127 +93,22 @@ CREATE TABLE batch_jobs (
 | `/api/batch/:id/retry` | POST | Retry all failed jobs |
 | `/api/batch/:id/jobs/:jobId/retry` | POST | Retry specific failed job |
 
-### SSE Event Types
-```typescript
-type SSEEvent =
-  | { type: 'batch_started'; batchId: string; totalJobs: number; eventId: number }
-  | { type: 'job_progress'; jobId: string; sequence: number; stage: string; message: string; eventId: number }
-  | { type: 'job_completed'; jobId: string; sequence: number; resultCode: string; eventCount: number; cached: boolean; eventId: number }
-  | { type: 'job_failed'; jobId: string; sequence: number; errorCode: string; errorMessage: string; retriable: boolean; eventId: number }
-  | { type: 'batch_completed'; completedJobs: number; failedJobs: number; results: JobResult[]; eventId: number }
-  | { type: 'batch_cancelled'; eventId: number };
-```
+### Key Implementation Details
 
-### SSE Reconnection (Last-Event-ID)
-
-When client reconnects with `Last-Event-ID` header:
-1. Server queries events since that ID from batch state
-2. Server replays missed events
-3. Continues streaming new events
-
-```typescript
-// Client
-const eventSource = new EventSource(`/api/batch/${id}/stream`);
-eventSource.onmessage = (e) => {
-  // Browser automatically sends Last-Event-ID on reconnect
-};
-
-// Server
-app.get('/api/batch/:id/stream', (c) => {
-  const lastEventId = parseInt(c.req.header('Last-Event-ID') || '0');
-  // Replay events since lastEventId, then stream new ones
-});
-```
-
-### Processing Flow (Decoupled)
-
-```
-1. POST /api/batch/extract
-   ├── Validate swimmer name
-   ├── Check batch limit (max 15 PDFs)
-   ├── Create processing_batches record (status: 'pending')
-   ├── For each PDF/URL:
-   │   └── Create batch_jobs record (status: 'pending')
-   ├── **Start background processing immediately**
-   └── Return { batchId, streamUrl }
-
-2. Background processor (runs independently):
-   ├── Update batch status → 'processing'
-   ├── Increment last_event_id for each event
-   │
-   ├── For each job (sequential):
-   │   ├── Check if batch cancelled → stop if so
-   │   ├── Update job stage → 'downloading' (if URL)
-   │   ├── Download PDF or read uploaded file
-   │   ├── Calculate MD5 checksum
-   │   │
-   │   ├── Check extraction cache
-   │   │   └── If cached → mark completed, continue
-   │   │
-   │   ├── Update job stage → 'uploading_to_ai'
-   │   ├── Upload to OpenAI
-   │   │
-   │   ├── Update job stage → 'extracting'
-   │   ├── Call AI extraction
-   │   │
-   │   ├── Update job stage → 'caching'
-   │   ├── Cache result, create result link
-   │   │
-   │   ├── On error:
-   │   │   ├── Classify error (transient vs permanent)
-   │   │   ├── If transient + retry_count < 3 → retry with backoff
-   │   │   └── Else mark failed
-   │   │
-   │   └── Update job → status: 'completed' | 'failed'
-   │
-   ├── Update batch counters
-   ├── Update batch status → 'completed' | 'partial' | 'failed'
-   └── Send email notification if registered
-
-3. GET /api/batch/:id/stream (client connects anytime):
-   ├── Replay events since Last-Event-ID
-   └── Stream new events as they occur
-```
-
-### Batch Size Limit
-
-```typescript
-const MAX_PDFS_PER_BATCH = 15;
-
-// In /api/batch/extract
-const totalPdfs = (files?.length || 0) + (urls?.length || 0);
-if (totalPdfs > MAX_PDFS_PER_BATCH) {
-  return c.json({
-    success: false,
-    error: 'BATCH_TOO_LARGE',
-    message: `Maximum ${MAX_PDFS_PER_BATCH} PDFs per batch. You submitted ${totalPdfs}.`
-  }, 400);
-}
-```
-
-### Retry Logic with Exponential Backoff
-
-```typescript
-const TRANSIENT_ERRORS = ['RATE_LIMIT', 'TIMEOUT', 'NETWORK_ERROR', 'AI_OVERLOADED'];
-const MAX_RETRIES = 3;
-const BASE_DELAY_MS = 1000;
-
-const shouldRetry = (errorCode: string, retryCount: number): boolean => {
-  return TRANSIENT_ERRORS.includes(errorCode) && retryCount < MAX_RETRIES;
-};
-
-const getRetryDelay = (retryCount: number): number => {
-  return BASE_DELAY_MS * Math.pow(2, retryCount); // 1s, 2s, 4s
-};
-```
+1. **Temp File Storage:** Uploaded files written to `/tmp/heatsync/{batchId}/{jobId}.pdf`
+2. **Polling Worker:** Background worker polls `batch_jobs` table every 2s using `FOR UPDATE SKIP LOCKED`
+3. **Global Concurrency:** Max 10 concurrent AI calls, enforced by counting active jobs in DB
+4. **SSE Broadcasting:** In-memory EventEmitter for real-time updates
+5. **Restart Resilience:** Jobs persist in DB — server restart resumes pending work automatically
 
 ### Files to Create
 - `packages/backend/src/routes/batch.ts` - New route handlers
 - `packages/backend/src/services/batchProcessor.ts` - Batch processing logic
 - `packages/backend/src/services/batchWorker.ts` - Background worker
+- `packages/backend/src/services/tempFiles.ts` - Temp file management
 
 ### Files to Modify
-- `packages/backend/src/index.ts` - Register batch routes
+- `packages/backend/src/index.ts` - Register batch routes, orphan recovery on startup
 - `packages/backend/src/services/openai.ts` - Add progress callback support
 - `packages/shared/src/types.ts` - Add batch-related types
 
@@ -216,96 +118,23 @@ const getRetryDelay = (retryCount: number): number => {
 
 **Goal:** Auto-discover heat sheet PDFs from swim meet website URLs
 
-### Use Case
-Instead of manually finding and entering each PDF link, user enters the swim meet website URL (e.g., `https://swimconnect.com/meet/12345`) and we crawl it to find all heat sheet PDFs.
-
 ### New Endpoint
 
-**POST `/api/discover-heatsheets`**
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/discover-heatsheets` | POST | Crawl meet URL, find PDFs |
 
-```typescript
-// Request
-{ url: string }
+### Key Implementation Details
 
-// Response
-{
-  success: true,
-  meetName?: string,
-  heatsheets: Array<{
-    url: string,
-    name: string,
-    size?: number,
-  }>
-}
-```
-
-### SSRF Protection
-
-```typescript
-import { URL } from 'url';
-
-const BLOCKED_HOSTS = [
-  'localhost',
-  '127.0.0.1',
-  '0.0.0.0',
-  '::1',
-  'metadata.google.internal',
-  '169.254.169.254', // AWS metadata
-];
-
-const isBlockedUrl = (urlString: string): boolean => {
-  try {
-    const url = new URL(urlString);
-    
-    // Block non-HTTP(S)
-    if (!['http:', 'https:'].includes(url.protocol)) return true;
-    
-    // Block internal hostnames
-    if (BLOCKED_HOSTS.includes(url.hostname)) return true;
-    
-    // Block private IP ranges
-    const ipMatch = url.hostname.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
-    if (ipMatch) {
-      const [, a, b] = ipMatch.map(Number);
-      if (a === 10) return true;                    // 10.0.0.0/8
-      if (a === 172 && b >= 16 && b <= 31) return true; // 172.16.0.0/12
-      if (a === 192 && b === 168) return true;      // 192.168.0.0/16
-      if (a === 127) return true;                   // 127.0.0.0/8
-    }
-    
-    return false;
-  } catch {
-    return true; // Invalid URL
-  }
-};
-
-// Usage
-if (isBlockedUrl(url)) {
-  return c.json({ success: false, error: 'BLOCKED_URL', message: 'URL not allowed' }, 400);
-}
-```
-
-### Fetch Limits
-
-```typescript
-const CRAWL_TIMEOUT_MS = 10000;
-const MAX_RESPONSE_SIZE = 10 * 1024 * 1024; // 10MB
-
-const response = await fetch(url, {
-  headers: { 'User-Agent': 'HeatSync/2.0 (https://heatsync.now)' },
-  signal: AbortSignal.timeout(CRAWL_TIMEOUT_MS),
-  redirect: 'follow',
-});
-
-const contentLength = parseInt(response.headers.get('content-length') || '0');
-if (contentLength > MAX_RESPONSE_SIZE) {
-  throw new Error('Page too large');
-}
-```
+1. **SSRF Protection:** Block private IPs, internal hostnames, metadata endpoints
+2. **Fetch Limits:** 10s timeout, 10MB max response
+3. **Optional Playwright:** For JavaScript-rendered pages (configurable)
+4. **Platform Detection:** SwimTopia, TeamUnify, Active.com specific patterns
 
 ### Files to Create
 - `packages/backend/src/routes/discover.ts` - Crawler endpoint
 - `packages/backend/src/services/crawler.ts` - HTML parsing logic
+- `packages/backend/src/services/urlValidation.ts` - SSRF protection
 
 ### Files to Modify
 - `packages/backend/src/index.ts` - Register discover route
@@ -316,69 +145,20 @@ if (contentLength > MAX_RESPONSE_SIZE) {
 
 **Goal:** Allow users to queue multiple heat sheets (via meet URL, direct URLs, or file upload)
 
-### New Store: `packages/webapp/src/lib/stores/batch.ts`
+### Key Implementation Details
 
-```typescript
-interface QueueItem {
-  id: string;
-  source: { type: 'file'; file: File } | { type: 'url'; url: string };
-  status: 'pending' | 'uploading' | 'processing' | 'completed' | 'failed';
-  stage?: string;
-  result?: ExtractionResult;
-  resultCode?: string;
-  error?: string;
-  retriable?: boolean;
-}
-
-// Stores
-export const queueItems = writable<QueueItem[]>([]);
-export const swimmerName = writable<string>('');
-export const batchId = writable<string | null>(null);
-export const batchStatus = writable<'idle' | 'collecting' | 'processing' | 'completed'>('idle');
-export const lastEventId = writable<number>(0);
-```
-
-### SSE Client with Reconnection
-
-```typescript
-const connectToStream = (id: string): void => {
-  const lastId = get(lastEventId);
-  const url = `/api/batch/${id}/stream`;
-  
-  const eventSource = new EventSource(url);
-  
-  // Browser automatically sends Last-Event-ID on reconnect
-  eventSource.addEventListener('job_progress', (e) => {
-    const data = JSON.parse(e.data);
-    lastEventId.set(data.eventId);
-    updateJobProgress(data);
-  });
-
-  eventSource.onerror = () => {
-    // EventSource auto-reconnects with Last-Event-ID
-    console.log('SSE reconnecting...');
-  };
-};
-```
-
-### New Components
-
-| Component | Purpose |
-|-----------|---------|
-| `MultiHeatSheetForm.svelte` | Main form with queue management |
-| `MeetUrlInput.svelte` | Enter meet website URL, discover PDFs |
-| `DiscoveredHeatsheets.svelte` | Show found PDFs, select which to include |
-| `HeatSheetQueue.svelte` | Display queued items with add/remove |
-| `QueueItem.svelte` | Individual item with status indicator |
-| `ProgressPanel.svelte` | Overall progress + per-item status |
-| `RetryButton.svelte` | Retry failed jobs |
+1. **Multi-file Drag & Drop:** Accept multiple PDF files
+2. **Queue Management:** Add, remove, reorder items
+3. **SSE with Reconnection:** Handle offline/reconnection gracefully
+4. **URL Validation:** Client-side validation before discovery
+5. **Progress Tracking:** Per-job and overall progress
 
 ### Files to Create
 - `packages/webapp/src/lib/stores/batch.ts`
+- `packages/webapp/src/lib/services/batchClient.ts` - SSE client with reconnection
 - `packages/webapp/src/lib/components/v2/MultiHeatSheetForm.svelte`
 - `packages/webapp/src/lib/components/v2/HeatSheetQueue.svelte`
 - `packages/webapp/src/lib/components/v2/ProgressPanel.svelte`
-- `packages/webapp/src/lib/services/batchClient.ts` - SSE client
 
 ---
 
@@ -386,49 +166,15 @@ const connectToStream = (id: string): void => {
 
 **Goal:** Notify users when long-running batches complete
 
-### UX Flow
-1. Processing starts
-2. After **first job completes OR 15 seconds elapsed**, email prompt appears
-3. User can enter email or dismiss
-4. On submit, email is stored with batch
-5. When batch completes, send email with results link
+### Key Implementation Details
 
-### Email Prompt Timing
-
-```typescript
-// In ProgressPanel.svelte
-let showPrompt = false;
-let promptTimer: number;
-
-$effect(() => {
-  if ($batchStatus === 'processing') {
-    // Show after 15 seconds OR first job completion, whichever is first
-    promptTimer = setTimeout(() => {
-      showPrompt = true;
-    }, 15000);
-  }
-  return () => clearTimeout(promptTimer);
-});
-
-// Also show when first job completes (if > 5 seconds elapsed)
-$effect(() => {
-  const completed = $queueItems.filter(i => i.status === 'completed').length;
-  const elapsed = Date.now() - processingStartTime;
-  if (completed === 1 && elapsed > 5000) {
-    showPrompt = true;
-  }
-});
-```
-
-### New Endpoint
-- `POST /api/batch/:id/notify` - Register email for notification
-
-### Email Service: Resend
-- Simple API, 100 free emails/day
-- No complex setup required
+1. **Atomic Send:** Prevent duplicate emails with atomic DB update
+2. **Privacy Compliant:** Include privacy policy link, explain why received
+3. **Email Validation:** Use zod for proper validation
+4. **Prompt Timing:** Show after 15s or first job completion
 
 ### Files to Create
-- `packages/backend/src/services/email.ts` - Email sending service
+- `packages/backend/src/services/email.ts` - Email sending service (Resend)
 - `packages/webapp/src/lib/components/v2/EmailPrompt.svelte`
 
 ---
@@ -437,28 +183,12 @@ $effect(() => {
 
 **Goal:** Display results organized by session/heat sheet
 
-### New Route: `/batch/:id`
+### Key Implementation Details
 
-Shows all extraction results from a batch, grouped by source PDF.
-
-### UI Design
-```
-Events for John Smith
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-▼ Session 1 - Morning Heats (session1.pdf)
-  ├── Jan 15 at Aquatic Center
-  ├── [✓] Event 5: 100 Free - Heat 3, Lane 4
-  └── [✓] Event 12: 50 Back - Heat 2, Lane 5
-
-▼ Session 2 - Afternoon (from URL)
-  └── ... 6 events
-
-⚠️ Session 3 - Failed (session3.pdf)
-  └── [Retry] Rate limit exceeded
-
-24 events selected
-[Export All to Calendar]  [Export Selected]
-```
+1. **Event Deduplication:** Detect same event across sources
+2. **Empty Source Handling:** Don't show sources with zero events
+3. **Deep Linking:** Support `#session-N` hash links
+4. **Smart Filenames:** Different names for single vs multi-source exports
 
 ### Files to Create
 - `packages/webapp/src/routes/batch/[id]/+page.svelte` - Batch results page
@@ -471,109 +201,17 @@ Events for John Smith
 
 **Goal:** Database maintenance, final integration, migration from old endpoints
 
-### Database Cleanup Cron
+### Key Implementation Details
 
-Add cleanup for expired batches (runs daily via cron or on-demand):
+1. **Batch Cleanup:** Delete expired batches (30 days)
+2. **Temp File Cleanup:** Remove orphaned temp files
+3. **Worker Health:** Heartbeat tracking, stuck batch detection
+4. **Analytics:** Track error types, batch metrics
+5. **Rollback Plan:** Keep v1 endpoints working, feature flags
 
-```typescript
-// packages/backend/src/services/cleanup.ts
-
-const BATCH_TTL_DAYS = 30;
-
-export const cleanupExpiredBatches = async (): Promise<number> => {
-  const db = getDb();
-  
-  const result = await db
-    .delete(processingBatches)
-    .where(
-      lt(processingBatches.createdAt, new Date(Date.now() - BATCH_TTL_DAYS * 24 * 60 * 60 * 1000))
-    )
-    .returning({ id: processingBatches.id });
-  
-  console.log(`Cleaned up ${result.length} expired batches`);
-  return result.length;
-};
-```
-
-### Cleanup Endpoint (Admin)
-
-```typescript
-// GET /api/admin/cleanup (protected, internal only)
-adminRoutes.get('/cleanup', async (c) => {
-  const deleted = await cleanupExpiredBatches();
-  return c.json({ success: true, deletedBatches: deleted });
-});
-```
-
-### Scheduled Cleanup (Cloudflare Worker)
-
-Add to the existing Cloudflare Worker cron:
-
-```typescript
-// In packages/cloudflare-worker/src/index.ts
-async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
-  // Keep-alive ping
-  await fetch(`https://${TARGET_HOST}/api/health`, { method: 'HEAD' });
-  
-  // Daily cleanup (run at specific hour only)
-  const hour = new Date().getUTCHours();
-  if (hour === 3) { // 3 AM UTC
-    await fetch(`https://${TARGET_HOST}/api/admin/cleanup`, {
-      headers: { 'X-Admin-Key': env.ADMIN_KEY }
-    });
-  }
-}
-```
-
-### Analytics Events
-
-Add tracking for v2 features:
-
-```typescript
-// packages/webapp/src/lib/utils/analytics.ts
-export const trackBatchStarted = (pdfCount: number, source: 'meet_url' | 'manual') => {
-  track('batch_started', { pdfCount, source });
-};
-
-export const trackCrawlerUsed = (success: boolean, pdfsFound: number) => {
-  track('crawler_used', { success, pdfsFound });
-};
-
-export const trackEmailRequested = () => {
-  track('email_notification_requested');
-};
-
-export const trackRetryClicked = (jobCount: number) => {
-  track('retry_clicked', { jobCount });
-};
-```
-
-### Migration: Deprecate Old Endpoints
-
-After v2 is stable:
-
-1. Add deprecation headers to old endpoints:
-```typescript
-app.post('/api/extract', async (c) => {
-  c.header('X-Deprecated', 'Use /api/batch/extract instead');
-  // ... existing logic
-});
-```
-
-2. Update frontend to use batch API exclusively
-3. Monitor usage of old endpoints
-4. Remove old endpoints in v2.1
-
-### Tasks
-
-- [ ] Create `packages/backend/src/services/cleanup.ts`
-- [ ] Add cleanup endpoint (admin-protected)
-- [ ] Update Cloudflare Worker for scheduled cleanup
-- [ ] Add analytics events for v2 features
-- [ ] Integration testing: full flow
-- [ ] Mobile testing
-- [ ] Add deprecation headers to old endpoints
-- [ ] Update user-facing help/FAQ
+### Files to Create
+- `packages/backend/src/services/cleanup.ts`
+- `packages/backend/src/routes/admin.ts`
 
 ---
 
@@ -585,13 +223,16 @@ app.post('/api/extract', async (c) => {
 | `packages/backend/src/db/schema.ts` | ADD batch tables |
 | `packages/backend/src/routes/batch.ts` | CREATE batch processing routes |
 | `packages/backend/src/routes/discover.ts` | CREATE meet URL crawler route |
+| `packages/backend/src/routes/admin.ts` | CREATE admin endpoints |
 | `packages/backend/src/services/batchProcessor.ts` | CREATE batch processing logic |
 | `packages/backend/src/services/batchWorker.ts` | CREATE background worker |
+| `packages/backend/src/services/tempFiles.ts` | CREATE temp file management |
 | `packages/backend/src/services/crawler.ts` | CREATE HTML parsing/PDF discovery |
+| `packages/backend/src/services/urlValidation.ts` | CREATE SSRF protection |
 | `packages/backend/src/services/email.ts` | CREATE email service (Resend) |
 | `packages/backend/src/services/cleanup.ts` | CREATE cleanup service |
 | `packages/backend/src/services/openai.ts` | MODIFY add progress callbacks |
-| `packages/backend/src/index.ts` | MODIFY register new routes |
+| `packages/backend/src/index.ts` | MODIFY register new routes, orphan recovery |
 
 ### Frontend
 | File | Action |
@@ -603,6 +244,7 @@ app.post('/api/extract', async (c) => {
 | `packages/webapp/src/lib/components/v2/DiscoveredHeatsheets.svelte` | CREATE PDF selection |
 | `packages/webapp/src/lib/components/v2/HeatSheetQueue.svelte` | CREATE queue display |
 | `packages/webapp/src/lib/components/v2/ProgressPanel.svelte` | CREATE progress UI |
+| `packages/webapp/src/lib/components/v2/EmailPrompt.svelte` | CREATE email prompt |
 | `packages/webapp/src/lib/components/v2/GroupedResults.svelte` | CREATE results display |
 | `packages/webapp/src/routes/batch/[id]/+page.svelte` | CREATE batch results page |
 | `packages/webapp/src/routes/+page.svelte` | MODIFY use new form |
@@ -636,31 +278,37 @@ Week 4:
 ### Implementation Order (Critical Path)
 
 1. **Database schema** (Phase 1) - blocks everything
-2. **Batch API + SSE** (Phase 2) - core functionality
-3. **Frontend stores + SSE client** (Phase 4 partial) - enables testing
-4. **Meet URL crawler** (Phase 3) - can run parallel with frontend
-5. **Full frontend UI** (Phase 4) - depends on API
-6. **Email notifications** (Phase 5) - independent, can be last
-7. **Grouped results** (Phase 6) - final polish
-8. **Cleanup & migration** (Phase 7) - after stable
+2. **Temp file service** (Phase 2 prereq) - blocks async file handling
+3. **Batch API + SSE** (Phase 2) - core functionality
+4. **Frontend stores + SSE client** (Phase 4 partial) - enables testing
+5. **Meet URL crawler** (Phase 3) - can run parallel with frontend
+6. **Full frontend UI** (Phase 4) - depends on API
+7. **Email notifications** (Phase 5) - independent, can be last
+8. **Grouped results** (Phase 6) - final polish
+9. **Cleanup & migration** (Phase 7) - after stable
 
 ---
 
 ## Verification Plan
 
 1. **Batch Creation**: Upload 3 PDFs → verify batch + 3 jobs created in DB
-2. **SSE Streaming**: Open stream → verify progress events received
-3. **SSE Reconnection**: Disconnect → reconnect → verify missed events replayed
-4. **Background Processing**: Close browser → reopen → verify processing continued
-5. **Batch Limit**: Submit 20 PDFs → verify rejected with clear message
-6. **Retry**: Failed job → click retry → verify re-processes
-7. **Cancel**: Mid-processing → cancel → verify remaining jobs stopped
-8. **Cache Integration**: Submit same PDF twice → verify second is cached
-9. **SSRF Protection**: Submit internal URL → verify blocked
-10. **Email Notification**: Enter email → wait for completion → verify email received
-11. **Grouped Results**: 3 PDFs → verify results grouped by source
-12. **Cleanup**: Create old batch → run cleanup → verify deleted
-13. **Mobile**: Test full flow on mobile device
+2. **File Persistence**: Create batch → verify temp files exist → process → verify cleanup
+3. **SSE Streaming**: Open stream → verify progress events received
+4. **SSE Reconnection**: Disconnect → reconnect → verify missed events replayed
+5. **Background Processing**: Close browser → reopen → verify processing continued
+6. **Concurrency Limit**: Submit 20 PDFs across 2 batches → verify max 10 concurrent AI calls
+7. **Batch Limit**: Submit 16 PDFs → verify rejected with clear message
+8. **Worker Recovery**: Kill worker mid-batch → restart server → verify batch resumes
+9. **Retry**: Failed job → click retry → verify re-processes
+10. **Cancel**: Mid-processing → cancel → verify remaining jobs stopped
+11. **Cache Integration**: Submit same PDF twice → verify second is cached
+12. **SSRF Protection**: Submit internal URL → verify blocked
+13. **Email Notification**: Enter email → wait for completion → verify email received (no duplicates)
+14. **Grouped Results**: 3 PDFs → verify results grouped by source
+15. **Event Deduplication**: Same event in 2 sources → verify flagged/handled
+16. **Cleanup**: Create old batch → run cleanup → verify deleted + temp files removed
+17. **Mobile**: Test full flow on mobile device
+18. **Offline**: Go offline mid-processing → come online → verify reconnection
 
 ---
 
@@ -670,6 +318,7 @@ Week 4:
 # Email notifications (Resend)
 RESEND_API_KEY=re_...
 NOTIFICATION_FROM_EMAIL=noreply@heatsync.now
+BASE_URL=https://heatsync.now
 
 # Admin (for cleanup endpoint)
 ADMIN_KEY=your_secret_admin_key
@@ -677,6 +326,14 @@ ADMIN_KEY=your_secret_admin_key
 # Limits
 MAX_PDFS_PER_BATCH=15
 BATCH_TTL_DAYS=30
+CONCURRENT_JOBS_PER_BATCH=3
+MAX_CONCURRENT_AI_CALLS=10
+
+# Temp files
+TEMP_FILE_DIR=/tmp/heatsync
+
+# Optional: Playwright for JS-rendered pages
+USE_PLAYWRIGHT_CRAWLER=false
 ```
 
 ---
@@ -686,11 +343,21 @@ BATCH_TTL_DAYS=30
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
 | Max PDFs per batch | **15** | Balance usability vs cost/abuse |
+| Concurrent jobs per batch | **3** | Faster completion without overwhelming AI |
+| Max concurrent AI calls (global) | **10** | Prevent API rate limits across all users |
 | Email provider | **Resend** | Simple API, 100 free emails/day |
 | SSE vs polling | **SSE with polling fallback** | Real-time updates, graceful degradation |
 | Processing model | **Decoupled background worker** | Survives client disconnects |
+| File storage | **Temp files on disk** | Required for async processing |
 | Retry strategy | **3 retries with exponential backoff** | Handle transient failures gracefully |
 | Batch TTL | **30 days** | Balance storage vs user convenience |
+| Worker recovery | **On startup orphan detection** | Handle crashes gracefully |
 
 ### Migration Note
 The batch API will replace `/api/extract` and `/api/extractUrl`. A batch with 1 PDF is equivalent to the old single-PDF flow. Existing result links (`/result/:code`) will continue to work.
+
+### Rollback Plan
+If v2 has critical issues:
+1. Feature flag `ENABLE_BATCH_API=false` disables new endpoints
+2. Old endpoints remain functional (not removed, just deprecated)
+3. Frontend can switch back to v1 form via feature detection
