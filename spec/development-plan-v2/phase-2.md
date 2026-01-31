@@ -57,20 +57,31 @@ Upload files to S3-compatible storage (Supabase Storage) immediately. Store the 
 ### File: `packages/backend/src/services/fileStorage.ts`
 
 ```typescript
-import { createClient } from '@supabase/supabase-js';
+import { 
+  S3Client, 
+  PutObjectCommand, 
+  GetObjectCommand, 
+  DeleteObjectCommand,
+  ListObjectsV2Command,
+  DeleteObjectsCommand,
+} from '@aws-sdk/client-s3';
 
-const supabase = createClient(
-  process.env.SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
+const s3 = new S3Client({
+  endpoint: process.env.S3_ENDPOINT,           // e.g., http://minio:9000
+  region: process.env.S3_REGION || 'us-east-1',
+  credentials: {
+    accessKeyId: process.env.S3_ACCESS_KEY!,
+    secretAccessKey: process.env.S3_SECRET_KEY!,
+  },
+  forcePathStyle: true,  // Required for MinIO and most S3-compatible storage
+});
 
-const BUCKET_NAME = process.env.STORAGE_BUCKET || 'heatsync-uploads';
-const UPLOAD_TTL_DAYS = 7; // Files auto-deleted after 7 days
+const BUCKET_NAME = process.env.S3_BUCKET || 'heatsync-uploads';
 
 /**
- * Get the storage path for a job's PDF
+ * Get the storage key for a job's PDF
  */
-export const getStoragePath = (batchId: string, jobId: string): string => {
+export const getStorageKey = (batchId: string, jobId: string): string => {
   return `batches/${batchId}/${jobId}.pdf`;
 };
 
@@ -82,49 +93,49 @@ export const uploadFile = async (
   jobId: string,
   file: File
 ): Promise<string> => {
-  const path = getStoragePath(batchId, jobId);
-  const buffer = await file.arrayBuffer();
+  const key = getStorageKey(batchId, jobId);
+  const buffer = Buffer.from(await file.arrayBuffer());
   
-  const { error } = await supabase.storage
-    .from(BUCKET_NAME)
-    .upload(path, buffer, {
-      contentType: 'application/pdf',
-      upsert: true,
-    });
+  await s3.send(new PutObjectCommand({
+    Bucket: BUCKET_NAME,
+    Key: key,
+    Body: buffer,
+    ContentType: 'application/pdf',
+  }));
 
-  if (error) {
-    throw new Error(`Failed to upload file: ${error.message}`);
-  }
-
-  console.log(`[Storage] Uploaded ${file.name} to ${path}`);
-  return path;
+  console.log(`[Storage] Uploaded ${file.name} to ${key}`);
+  return key;
 };
 
 /**
  * Download a file from storage as ArrayBuffer
  */
-export const downloadFile = async (storagePath: string): Promise<ArrayBuffer> => {
-  const { data, error } = await supabase.storage
-    .from(BUCKET_NAME)
-    .download(storagePath);
+export const downloadFile = async (storageKey: string): Promise<ArrayBuffer> => {
+  const response = await s3.send(new GetObjectCommand({
+    Bucket: BUCKET_NAME,
+    Key: storageKey,
+  }));
 
-  if (error || !data) {
-    throw new Error(`Failed to download file: ${error?.message || 'No data'}`);
+  if (!response.Body) {
+    throw new Error('No data returned from S3');
   }
 
-  return await data.arrayBuffer();
+  // Convert stream to ArrayBuffer
+  const bytes = await response.Body.transformToByteArray();
+  return bytes.buffer;
 };
 
 /**
  * Delete a single file from storage
  */
-export const deleteFile = async (storagePath: string): Promise<void> => {
-  const { error } = await supabase.storage
-    .from(BUCKET_NAME)
-    .remove([storagePath]);
-
-  if (error) {
-    console.error(`[Storage] Failed to delete ${storagePath}:`, error.message);
+export const deleteFile = async (storageKey: string): Promise<void> => {
+  try {
+    await s3.send(new DeleteObjectCommand({
+      Bucket: BUCKET_NAME,
+      Key: storageKey,
+    }));
+  } catch (error) {
+    console.error(`[Storage] Failed to delete ${storageKey}:`, error);
   }
 };
 
@@ -135,55 +146,87 @@ export const cleanupBatchFiles = async (batchId: string): Promise<void> => {
   const prefix = `batches/${batchId}/`;
   
   // List all files in batch folder
-  const { data: files, error: listError } = await supabase.storage
-    .from(BUCKET_NAME)
-    .list(`batches/${batchId}`);
+  const listResponse = await s3.send(new ListObjectsV2Command({
+    Bucket: BUCKET_NAME,
+    Prefix: prefix,
+  }));
 
-  if (listError || !files?.length) {
+  const objects = listResponse.Contents;
+  if (!objects?.length) {
     return; // No files to delete
   }
 
-  const paths = files.map(f => `${prefix}${f.name}`);
-  
-  const { error } = await supabase.storage
-    .from(BUCKET_NAME)
-    .remove(paths);
+  // Delete all objects
+  await s3.send(new DeleteObjectsCommand({
+    Bucket: BUCKET_NAME,
+    Delete: {
+      Objects: objects.map(obj => ({ Key: obj.Key! })),
+    },
+  }));
 
-  if (error) {
-    console.error(`[Storage] Failed to cleanup batch ${batchId}:`, error.message);
-  } else {
-    console.log(`[Storage] Cleaned up ${paths.length} files for batch ${batchId}`);
-  }
+  console.log(`[Storage] Cleaned up ${objects.length} files for batch ${batchId}`);
 };
 
 /**
- * Get a signed URL for direct download (optional, for debugging)
+ * Check if storage is reachable (for health checks)
  */
-export const getSignedUrl = async (storagePath: string, expiresIn = 3600): Promise<string> => {
-  const { data, error } = await supabase.storage
-    .from(BUCKET_NAME)
-    .createSignedUrl(storagePath, expiresIn);
-
-  if (error || !data) {
-    throw new Error(`Failed to create signed URL: ${error?.message}`);
+export const checkStorageHealth = async (): Promise<boolean> => {
+  try {
+    await s3.send(new ListObjectsV2Command({
+      Bucket: BUCKET_NAME,
+      MaxKeys: 1,
+    }));
+    return true;
+  } catch {
+    return false;
   }
-
-  return data.signedUrl;
 };
 ```
 
-### Supabase Storage Setup
+### S3-Compatible Storage Setup
 
-1. Create a bucket named `heatsync-uploads` in Supabase Dashboard
-2. Set bucket to **private** (no public access)
-3. Add lifecycle rule to auto-delete files older than 7 days (optional)
+Works with any S3-compatible storage:
+- **MinIO** (self-hosted)
+- **AWS S3**
+- **DigitalOcean Spaces**
+- **Cloudflare R2**
+- **Backblaze B2**
+
+#### MinIO Setup (Docker)
+
+```yaml
+# docker-compose.yml
+services:
+  minio:
+    image: minio/minio
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - minio_data:/data
+
+volumes:
+  minio_data:
+```
+
+Then create the bucket:
+```bash
+mc alias set local http://localhost:9000 minioadmin minioadmin
+mc mb local/heatsync-uploads
+```
 
 ### Environment Variables
 
 ```bash
-SUPABASE_URL=https://xxx.supabase.co
-SUPABASE_SERVICE_ROLE_KEY=eyJhbGc...  # Service role key (not anon key)
-STORAGE_BUCKET=heatsync-uploads
+S3_ENDPOINT=http://localhost:9000    # MinIO endpoint
+S3_REGION=us-east-1                  # Required but can be any value for MinIO
+S3_ACCESS_KEY=minioadmin
+S3_SECRET_KEY=minioadmin
+S3_BUCKET=heatsync-uploads
 ```
 
 ---
