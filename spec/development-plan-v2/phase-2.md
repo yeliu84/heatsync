@@ -8,14 +8,21 @@
 
 ---
 
-## Key Design: Decoupled Processing
+## Key Design: Postgres-Backed Job Queue
 
-**Problem:** If processing is tied to the SSE connection, closing the browser tab stops processing.
+**Problem:** If processing is tied to the SSE connection, closing the browser tab stops processing. If jobs are held in memory, server restarts lose all pending work.
 
 **Solution:** 
-1. `POST /api/batch/extract` starts background processing immediately
-2. `GET /api/batch/:id/stream` just observes progress (can reconnect anytime)
-3. Processing continues even if no client is connected
+1. `POST /api/batch/extract` writes files to temp storage, inserts jobs into DB
+2. Background worker **polls** the `batch_jobs` table for pending work
+3. `GET /api/batch/:id/stream` just observes progress (can reconnect anytime)
+4. Processing continues even if no client is connected
+5. **On server restart, jobs resume automatically** (they're in the DB, not memory)
+
+**Why not Redis/pg-boss?**
+- Supabase uses PgBouncer in transaction mode — `LISTEN/NOTIFY` doesn't work reliably
+- We already have the `batch_jobs` table — no extra dependencies needed
+- Polling with `FOR UPDATE SKIP LOCKED` is simple and battle-tested
 
 ---
 
@@ -23,7 +30,7 @@
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/batch/extract` | POST | Create batch, start processing immediately |
+| `/api/batch/extract` | POST | Create batch, enqueue jobs in DB |
 | `/api/batch/:id/stream` | GET | SSE stream for progress updates (reconnectable) |
 | `/api/batch/:id` | GET | Polling fallback for batch status |
 | `/api/batch/:id/results` | GET | Get merged results from all jobs |
@@ -33,386 +40,747 @@
 
 ---
 
-## API Specifications
+## File Storage (S3-Compatible)
 
-### POST `/api/batch/extract`
+### Problem
+When a user uploads files via multipart form data, the `File` objects exist only during the request. Local temp files don't work on serverless/ephemeral containers.
 
-Create a new batch processing request. Processing starts immediately in background.
+### Solution
+Upload files to S3-compatible storage (Supabase Storage) immediately. Store the storage path in DB.
 
-**Request (multipart/form-data):**
-```typescript
-interface BatchExtractRequest {
-  swimmer: string;          // Swimmer name (required)
-  pdfs?: File[];            // Direct file uploads (optional)
-  urls?: string;            // JSON array of URLs (optional)
-}
-```
+**Why S3-compatible?**
+- Works with any deployment (serverless, containers, VPS)
+- Supabase Storage is already available (same project)
+- Survives server restarts
+- Can set TTL policies for automatic cleanup
 
-**Response:**
-```typescript
-interface BatchExtractResponse {
-  success: true;
-  batchId: string;
-  totalJobs: number;
-  streamUrl: string;        // "/api/batch/{batchId}/stream"
-}
-```
-
-**Error Responses:**
-```typescript
-// Batch too large
-{ success: false, error: 'BATCH_TOO_LARGE', message: 'Maximum 15 PDFs per batch. You submitted 20.' }
-
-// Missing swimmer name
-{ success: false, error: 'MISSING_SWIMMER', message: 'Swimmer name is required.' }
-
-// No PDFs provided
-{ success: false, error: 'NO_PDFS', message: 'At least one PDF file or URL is required.' }
-```
-
-### Batch Size Limit
+### File: `packages/backend/src/services/fileStorage.ts`
 
 ```typescript
-const MAX_PDFS_PER_BATCH = parseInt(process.env.MAX_PDFS_PER_BATCH || '15');
+import { 
+  S3Client, 
+  PutObjectCommand, 
+  GetObjectCommand, 
+  DeleteObjectCommand,
+  ListObjectsV2Command,
+  DeleteObjectsCommand,
+} from '@aws-sdk/client-s3';
 
-// Validation in /api/batch/extract
-const totalPdfs = (files?.length || 0) + (urls?.length || 0);
-if (totalPdfs > MAX_PDFS_PER_BATCH) {
-  return c.json({
-    success: false,
-    error: 'BATCH_TOO_LARGE',
-    message: `Maximum ${MAX_PDFS_PER_BATCH} PDFs per batch. You submitted ${totalPdfs}.`
-  }, 400);
-}
-if (totalPdfs === 0) {
-  return c.json({
-    success: false,
-    error: 'NO_PDFS',
-    message: 'At least one PDF file or URL is required.'
-  }, 400);
-}
-```
-
----
-
-### GET `/api/batch/:id/stream`
-
-SSE stream for real-time progress updates. Supports reconnection via `Last-Event-ID`.
-
-**SSE Event Types:**
-```typescript
-type SSEEvent =
-  // Batch started
-  | { type: 'batch_started'; batchId: string; totalJobs: number; swimmerName: string; eventId: number }
-  
-  // Job progress update
-  | { type: 'job_progress'; jobId: string; sequence: number; stage: JobStage; message: string; eventId: number }
-  
-  // Job completed successfully
-  | { type: 'job_completed'; jobId: string; sequence: number; resultCode: string; eventCount: number; meetName: string; cached: boolean; eventId: number }
-  
-  // Job failed
-  | { type: 'job_failed'; jobId: string; sequence: number; errorCode: string; errorMessage: string; retriable: boolean; retryCount: number; eventId: number }
-  
-  // All jobs done
-  | { type: 'batch_completed'; status: 'completed' | 'partial' | 'failed'; completedJobs: number; failedJobs: number; totalEvents: number; results: JobResult[]; eventId: number }
-  
-  // Batch cancelled
-  | { type: 'batch_cancelled'; eventId: number };
-
-type JobStage = 'queued' | 'downloading' | 'uploading_to_ai' | 'extracting' | 'caching' | 'done' | 'failed';
-```
-
-### SSE Reconnection (Last-Event-ID)
-
-When client reconnects with `Last-Event-ID` header:
-1. Server queries batch state and reconstructs events since that ID
-2. Server replays missed events
-3. Continues streaming new events
-
-```typescript
-// Server implementation
-batchRoutes.get('/:id/stream', async (c) => {
-  const batchId = c.req.param('id');
-  const lastEventId = parseInt(c.req.header('Last-Event-ID') || '0');
-
-  return streamSSE(c, async (stream) => {
-    // Get current batch state
-    const batch = await getBatch(batchId);
-    if (!batch) {
-      await stream.writeSSE({ event: 'error', data: JSON.stringify({ error: 'Batch not found' }) });
-      return;
-    }
-
-    // Replay events since lastEventId
-    if (lastEventId < batch.lastEventId) {
-      const events = await reconstructEventsSince(batchId, lastEventId);
-      for (const event of events) {
-        await stream.writeSSE({ id: String(event.eventId), event: event.type, data: JSON.stringify(event) });
-      }
-    }
-
-    // Subscribe to new events
-    await subscribeToEvents(batchId, async (event) => {
-      await stream.writeSSE({ id: String(event.eventId), event: event.type, data: JSON.stringify(event) });
-    });
-  });
+const s3 = new S3Client({
+  endpoint: process.env.S3_ENDPOINT,           // e.g., http://minio:9000
+  region: process.env.S3_REGION || 'us-east-1',
+  credentials: {
+    accessKeyId: process.env.S3_ACCESS_KEY!,
+    secretAccessKey: process.env.S3_SECRET_KEY!,
+  },
+  forcePathStyle: true,  // Required for MinIO and most S3-compatible storage
 });
-```
 
----
+const BUCKET_NAME = process.env.S3_BUCKET || 'heatsync-uploads';
 
-### POST `/api/batch/:id/cancel`
-
-Cancel a batch. Stops processing of pending jobs.
-
-**Response:**
-```typescript
-{ success: true, cancelledJobs: number }
-```
-
----
-
-### POST `/api/batch/:id/retry`
-
-Retry all failed jobs in a batch.
-
-**Response:**
-```typescript
-{ success: true, retriedJobs: number }
-```
-
----
-
-### POST `/api/batch/:id/jobs/:jobId/retry`
-
-Retry a specific failed job.
-
-**Response:**
-```typescript
-{ success: true }
-```
-
----
-
-### GET `/api/batch/:id`
-
-Polling fallback for batch status (for clients that can't use SSE).
-
-**Response:**
-```typescript
-interface BatchStatusResponse {
-  success: true;
-  batch: {
-    id: string;
-    swimmerName: string;
-    status: 'pending' | 'processing' | 'completed' | 'failed' | 'partial' | 'cancelled';
-    totalJobs: number;
-    completedJobs: number;
-    failedJobs: number;
-    lastEventId: number;
-  };
-  jobs: Array<{
-    id: string;
-    sequence: number;
-    filename: string | null;
-    sourceUrl: string | null;
-    status: string;
-    stage: string | null;
-    resultCode: string | null;
-    error: string | null;
-    errorCode: string | null;
-    retriable: boolean;
-    retryCount: number;
-  }>;
-}
-```
-
----
-
-### GET `/api/batch/:id/results`
-
-Get merged results from all completed jobs.
-
-**Response:**
-```typescript
-interface BatchResultsResponse {
-  success: true;
-  swimmerName: string;
-  totalEvents: number;
-  sources: Array<{
-    sequence: number;
-    filename: string | null;
-    sourceUrl: string | null;
-    meetName: string;
-    sessionDate: string;
-    venue: string | null;
-    eventCount: number;
-    resultCode: string;
-  }>;
-  events: SwimEvent[];      // All events merged
-  warnings: string[];
-  failedSources: Array<{
-    sequence: number;
-    filename: string | null;
-    errorMessage: string;
-    retriable: boolean;
-  }>;
-}
-```
-
----
-
-## Processing Flow (Decoupled)
-
-```
-1. POST /api/batch/extract
-   ├── Validate swimmer name
-   ├── Check batch limit (max 15 PDFs)
-   ├── Create processing_batches record (status: 'pending', expires_at: NOW + 30 days)
-   ├── For each PDF/URL:
-   │   └── Create batch_jobs record (status: 'pending', stage: 'queued')
-   ├── **Spawn background worker immediately**
-   └── Return { batchId, streamUrl }
-
-2. Background worker (runs independently of SSE):
-   ├── Update batch status → 'processing', started_at = NOW
-   ├── Emit event: batch_started (increment last_event_id)
-   │
-   ├── For each job (sequential):
-   │   ├── Check if batch cancelled → stop if so
-   │   │
-   │   ├── [If URL] Update job stage → 'downloading'
-   │   ├── [If URL] Emit event: job_progress
-   │   ├── [If URL] Download PDF
-   │   │
-   │   ├── Calculate MD5 checksum
-   │   │
-   │   ├── Check extraction cache (pdf_id + swimmer)
-   │   │   └── If cached → emit job_completed (cached: true), continue
-   │   │
-   │   ├── Update job stage → 'uploading_to_ai'
-   │   ├── Emit event: job_progress
-   │   ├── Upload PDF to OpenAI
-   │   │
-   │   ├── Update job stage → 'extracting'
-   │   ├── Emit event: job_progress
-   │   ├── Call AI extraction
-   │   │
-   │   ├── Update job stage → 'caching'
-   │   ├── Cache result, create result link
-   │   │
-   │   ├── On success:
-   │   │   ├── Update job → status: 'completed', stage: 'done'
-   │   │   └── Emit event: job_completed
-   │   │
-   │   └── On error:
-   │       ├── Classify error (transient vs permanent)
-   │       ├── If transient + retry_count < 3:
-   │       │   ├── Increment retry_count
-   │       │   ├── Wait (exponential backoff)
-   │       │   └── Retry current job
-   │       └── Else:
-   │           ├── Update job → status: 'failed', error_code, error_message
-   │           └── Emit event: job_failed (retriable: transient && retry_count < 3)
-   │
-   ├── Update batch counters (completed_pdfs, failed_pdfs)
-   ├── Update batch status → 'completed' | 'partial' | 'failed'
-   ├── Emit event: batch_completed
-   └── Send email notification if registered (Phase 5)
-
-3. GET /api/batch/:id/stream (client connects anytime):
-   ├── Read Last-Event-ID header
-   ├── Replay events since Last-Event-ID (reconstruct from DB state)
-   └── Subscribe to new events as they occur
-```
-
----
-
-## Retry Logic
-
-### Error Classification
-
-```typescript
-const TRANSIENT_ERRORS = [
-  'RATE_LIMIT',        // OpenAI rate limit
-  'TIMEOUT',           // Request timeout
-  'NETWORK_ERROR',     // Network failure
-  'AI_OVERLOADED',     // OpenAI capacity
-  'SERVICE_UNAVAILABLE', // 503 errors
-];
-
-const PERMANENT_ERRORS = [
-  'INVALID_PDF',       // Not a valid PDF
-  'PDF_TOO_LARGE',     // Exceeds size limit
-  'EXTRACTION_FAILED', // AI couldn't extract events
-  'SWIMMER_NOT_FOUND', // No events for swimmer
-];
-
-const classifyError = (error: Error): { code: string; retriable: boolean } => {
-  if (error.message.includes('rate limit')) return { code: 'RATE_LIMIT', retriable: true };
-  if (error.message.includes('timeout')) return { code: 'TIMEOUT', retriable: true };
-  // ... etc
-  return { code: 'UNKNOWN', retriable: false };
-};
-```
-
-### Exponential Backoff
-
-```typescript
-const MAX_RETRIES = 3;
-const BASE_DELAY_MS = 1000;
-
-const getRetryDelay = (retryCount: number): number => {
-  return BASE_DELAY_MS * Math.pow(2, retryCount); // 1s, 2s, 4s
+/**
+ * Get the storage key for a job's PDF
+ */
+export const getStorageKey = (batchId: string, jobId: string): string => {
+  return `batches/${batchId}/${jobId}.pdf`;
 };
 
-const processJobWithRetry = async (job: BatchJob): Promise<void> => {
-  while (job.retryCount <= MAX_RETRIES) {
-    try {
-      await processJob(job);
-      return;
-    } catch (error) {
-      const { code, retriable } = classifyError(error);
-      
-      if (!retriable || job.retryCount >= MAX_RETRIES) {
-        throw error; // Give up
-      }
-      
-      job.retryCount++;
-      await updateJobRetryCount(job.id, job.retryCount);
-      
-      const delay = getRetryDelay(job.retryCount);
-      console.log(`Retrying job ${job.id} in ${delay}ms (attempt ${job.retryCount + 1})`);
-      await sleep(delay);
-    }
+/**
+ * Upload a file to S3-compatible storage
+ */
+export const uploadFile = async (
+  batchId: string,
+  jobId: string,
+  file: File
+): Promise<string> => {
+  const key = getStorageKey(batchId, jobId);
+  const buffer = Buffer.from(await file.arrayBuffer());
+  
+  await s3.send(new PutObjectCommand({
+    Bucket: BUCKET_NAME,
+    Key: key,
+    Body: buffer,
+    ContentType: 'application/pdf',
+  }));
+
+  console.log(`[Storage] Uploaded ${file.name} to ${key}`);
+  return key;
+};
+
+/**
+ * Download a file from storage as ArrayBuffer
+ */
+export const downloadFile = async (storageKey: string): Promise<ArrayBuffer> => {
+  const response = await s3.send(new GetObjectCommand({
+    Bucket: BUCKET_NAME,
+    Key: storageKey,
+  }));
+
+  if (!response.Body) {
+    throw new Error('No data returned from S3');
+  }
+
+  // Convert stream to ArrayBuffer
+  const bytes = await response.Body.transformToByteArray();
+  return bytes.buffer;
+};
+
+/**
+ * Delete a single file from storage
+ */
+export const deleteFile = async (storageKey: string): Promise<void> => {
+  try {
+    await s3.send(new DeleteObjectCommand({
+      Bucket: BUCKET_NAME,
+      Key: storageKey,
+    }));
+  } catch (error) {
+    console.error(`[Storage] Failed to delete ${storageKey}:`, error);
+  }
+};
+
+/**
+ * Delete all files for a batch
+ */
+export const cleanupBatchFiles = async (batchId: string): Promise<void> => {
+  const prefix = `batches/${batchId}/`;
+  
+  // List all files in batch folder
+  const listResponse = await s3.send(new ListObjectsV2Command({
+    Bucket: BUCKET_NAME,
+    Prefix: prefix,
+  }));
+
+  const objects = listResponse.Contents;
+  if (!objects?.length) {
+    return; // No files to delete
+  }
+
+  // Delete all objects
+  await s3.send(new DeleteObjectsCommand({
+    Bucket: BUCKET_NAME,
+    Delete: {
+      Objects: objects.map(obj => ({ Key: obj.Key! })),
+    },
+  }));
+
+  console.log(`[Storage] Cleaned up ${objects.length} files for batch ${batchId}`);
+};
+
+/**
+ * Check if storage is reachable (for health checks)
+ */
+export const checkStorageHealth = async (): Promise<boolean> => {
+  try {
+    await s3.send(new ListObjectsV2Command({
+      Bucket: BUCKET_NAME,
+      MaxKeys: 1,
+    }));
+    return true;
+  } catch {
+    return false;
   }
 };
 ```
 
+### S3-Compatible Storage Setup
+
+Works with any S3-compatible storage (self-hosted or cloud).
+
+### Environment Variables
+
+```bash
+S3_ENDPOINT=http://localhost:9000    # MinIO endpoint
+S3_REGION=us-east-1                  # Required but can be any value for MinIO
+S3_ACCESS_KEY=minioadmin
+S3_SECRET_KEY=minioadmin
+S3_BUCKET=heatsync-uploads
+```
+
 ---
 
-## Implementation
+## Concurrency Control (DB-Based)
 
-### File: `packages/backend/src/routes/batch.ts`
+### Problem
+Without limits, many concurrent batches could overwhelm OpenAI with requests.
+
+### Solution
+**Count active jobs in DB** before claiming new work. No in-memory state = works across restarts.
+
+### File: `packages/backend/src/services/concurrency.ts`
 
 ```typescript
+import { getDb } from '@heatsync/backend/db';
+import { batchJobs } from '@heatsync/backend/db/schema';
+import { eq, sql } from 'drizzle-orm';
+
+const MAX_CONCURRENT_AI_CALLS = parseInt(process.env.MAX_CONCURRENT_AI_CALLS || '10');
+const CONCURRENT_JOBS_PER_BATCH = parseInt(process.env.CONCURRENT_JOBS_PER_BATCH || '3');
+
+/**
+ * Check if we can start more AI jobs globally
+ */
+export const canStartGlobalJob = async (): Promise<boolean> => {
+  const db = getDb();
+  
+  const [result] = await db
+    .select({ count: sql<number>`count(*)` })
+    .from(batchJobs)
+    .where(eq(batchJobs.status, 'processing'));
+  
+  const activeJobs = result?.count || 0;
+  return activeJobs < MAX_CONCURRENT_AI_CALLS;
+};
+
+/**
+ * Check if a specific batch can start more jobs
+ */
+export const canStartBatchJob = async (batchId: string): Promise<boolean> => {
+  const db = getDb();
+  
+  const [result] = await db
+    .select({ count: sql<number>`count(*)` })
+    .from(batchJobs)
+    .where(sql`${batchJobs.batchId} = ${batchId} AND ${batchJobs.status} = 'processing'`);
+  
+  const activeJobs = result?.count || 0;
+  return activeJobs < CONCURRENT_JOBS_PER_BATCH;
+};
+
+/**
+ * Get current concurrency stats
+ */
+export const getConcurrencyStats = async () => {
+  const db = getDb();
+  
+  const [global] = await db
+    .select({ count: sql<number>`count(*)` })
+    .from(batchJobs)
+    .where(eq(batchJobs.status, 'processing'));
+  
+  return {
+    activeGlobal: global?.count || 0,
+    maxGlobal: MAX_CONCURRENT_AI_CALLS,
+    maxPerBatch: CONCURRENT_JOBS_PER_BATCH,
+  };
+};
+
+console.log(`[Concurrency] Global limit: ${MAX_CONCURRENT_AI_CALLS}, per-batch: ${CONCURRENT_JOBS_PER_BATCH}`);
+```
+
+---
+
+## SSE Event Broadcasting
+
+### Problem
+Need to notify connected SSE clients when job progress updates.
+
+### Solution
+In-memory EventEmitter (single server, SSE clients only — doesn't need persistence).
+
+### File: `packages/backend/src/services/eventBroadcast.ts`
+
+```typescript
+import { EventEmitter } from 'node:events';
+
+const emitter = new EventEmitter();
+emitter.setMaxListeners(100);
+
+export type SSEEventType = 
+  | 'batch_started'
+  | 'job_progress'
+  | 'job_completed'
+  | 'job_failed'
+  | 'batch_completed'
+  | 'batch_cancelled';
+
+export interface SSEEvent {
+  type: SSEEventType;
+  eventId: number;
+  [key: string]: unknown;
+}
+
+/**
+ * Emit event for a batch
+ */
+export const emitBatchEvent = (batchId: string, event: SSEEvent): void => {
+  emitter.emit(`batch:${batchId}`, event);
+};
+
+/**
+ * Subscribe to events for a batch
+ */
+export const subscribeToBatch = (
+  batchId: string,
+  callback: (event: SSEEvent) => void
+): (() => void) => {
+  const handler = (event: SSEEvent) => callback(event);
+  emitter.on(`batch:${batchId}`, handler);
+  return () => emitter.off(`batch:${batchId}`, handler);
+};
+```
+
+---
+
+## Polling Worker
+
+**This is the core change** — instead of spawning in-memory tasks, a worker polls the DB.
+
+### File: `packages/backend/src/services/jobWorker.ts`
+
+```typescript
+import { getDb } from '@heatsync/backend/db';
+import { processingBatches, batchJobs } from '@heatsync/backend/db/schema';
+import { eq, and, sql, or } from 'drizzle-orm';
+import { emitBatchEvent } from './eventBroadcast';
+import { canStartGlobalJob, canStartBatchJob } from './concurrency';
+import { downloadFile, deleteFile, cleanupBatchFiles } from './fileStorage';
+import { extractFromPdf } from './openai';
+import { sendCompletionNotification } from './email';
+
+const POLL_INTERVAL_MS = 2000; // Poll every 2 seconds
+const HEARTBEAT_INTERVAL_MS = 30_000;
+const MAX_RETRIES = 3;
+const BASE_RETRY_DELAY_MS = 1000;
+
+let isRunning = false;
+let pollTimeout: Timer | null = null;
+
+/**
+ * Start the polling worker
+ */
+export const startWorker = (): void => {
+  if (isRunning) return;
+  isRunning = true;
+  console.log('[Worker] Started');
+  schedulePoll();
+};
+
+/**
+ * Stop the polling worker (for graceful shutdown)
+ */
+export const stopWorker = (): void => {
+  isRunning = false;
+  if (pollTimeout) {
+    clearTimeout(pollTimeout);
+    pollTimeout = null;
+  }
+  console.log('[Worker] Stopped');
+};
+
+/**
+ * Schedule next poll
+ */
+const schedulePoll = (): void => {
+  if (!isRunning) return;
+  pollTimeout = setTimeout(pollForWork, POLL_INTERVAL_MS);
+};
+
+/**
+ * Poll for pending jobs and process them
+ */
+const pollForWork = async (): Promise<void> => {
+  try {
+    // Check global concurrency
+    if (!(await canStartGlobalJob())) {
+      schedulePoll();
+      return;
+    }
+
+    const db = getDb();
+
+    // Claim a pending job using FOR UPDATE SKIP LOCKED
+    // This is atomic — only one worker instance can claim each job
+    const claimedJobs = await db.execute(sql`
+      UPDATE batch_jobs
+      SET 
+        status = 'processing',
+        started_at = NOW()
+      WHERE id = (
+        SELECT bj.id 
+        FROM batch_jobs bj
+        INNER JOIN processing_batches pb ON bj.batch_id = pb.id
+        WHERE bj.status = 'pending'
+          AND pb.status IN ('pending', 'processing')
+          -- Per-batch concurrency: count processing jobs for this batch
+          AND (
+            SELECT COUNT(*) FROM batch_jobs 
+            WHERE batch_id = bj.batch_id AND status = 'processing'
+          ) < ${parseInt(process.env.CONCURRENT_JOBS_PER_BATCH || '3')}
+        ORDER BY bj.created_at
+        LIMIT 1
+        FOR UPDATE SKIP LOCKED
+      )
+      RETURNING *
+    `);
+
+    if (claimedJobs.rows.length === 0) {
+      schedulePoll();
+      return;
+    }
+
+    const job = claimedJobs.rows[0] as any;
+    console.log(`[Worker] Claimed job ${job.id} (batch ${job.batch_id}, seq ${job.sequence})`);
+
+    // Ensure batch is marked as processing
+    await db.update(processingBatches)
+      .set({ 
+        status: 'processing',
+        startedAt: sql`COALESCE(started_at, NOW())`,
+        workerHeartbeat: new Date(),
+      })
+      .where(eq(processingBatches.id, job.batch_id));
+
+    // Process the job (don't await — let it run while we poll for more)
+    processJob(job).catch(err => {
+      console.error(`[Worker] Error processing job ${job.id}:`, err);
+    });
+
+  } catch (error) {
+    console.error('[Worker] Poll error:', error);
+  }
+
+  schedulePoll();
+};
+
+/**
+ * Process a single job
+ */
+const processJob = async (job: any): Promise<void> => {
+  const db = getDb();
+  const batchId = job.batch_id;
+
+  // Get swimmer name from batch
+  const [batch] = await db
+    .select()
+    .from(processingBatches)
+    .where(eq(processingBatches.id, batchId));
+
+  if (!batch) {
+    console.error(`[Worker] Batch ${batchId} not found for job ${job.id}`);
+    return;
+  }
+
+  const swimmerName = batch.swimmerNameDisplay;
+
+  try {
+    let buffer: ArrayBuffer;
+
+    // Download or read file
+    if (job.source_type === 'url') {
+      await updateJobProgress(batchId, job.id, job.sequence, 'downloading', 'Downloading PDF...');
+      buffer = await downloadPdf(job.source_url);
+    } else {
+      buffer = await downloadFile(job.storage_path);
+    }
+
+    // Extract with AI
+    await updateJobProgress(batchId, job.id, job.sequence, 'extracting', 'Analyzing with AI...');
+    
+    const result = await extractFromPdf(buffer, swimmerName, {
+      sourceUrl: job.source_url || undefined,
+      filename: job.filename || undefined,
+    });
+
+    // Mark job completed
+    await db.update(batchJobs)
+      .set({
+        status: 'completed',
+        stage: 'done',
+        completedAt: new Date(),
+        extractionId: result.extractionId,
+        resultCode: result.resultCode,
+        meetName: result.result.meetName,
+        eventCount: result.result.events.length,
+        cached: result.cached,
+      })
+      .where(eq(batchJobs.id, job.id));
+
+    // Update batch counter
+    await db.execute(sql`
+      UPDATE processing_batches 
+      SET completed_pdfs = completed_pdfs + 1 
+      WHERE id = ${batchId}
+    `);
+
+    // Emit completion event
+    const eventId = await incrementEventId(batchId);
+    emitBatchEvent(batchId, {
+      type: 'job_completed',
+      jobId: job.id,
+      sequence: job.sequence,
+      resultCode: result.resultCode || '',
+      eventCount: result.result.events.length,
+      meetName: result.result.meetName,
+      cached: result.cached,
+      eventId,
+    });
+
+    // Cleanup temp file
+    if (job.storage_path) {
+      await deleteFile(job.storage_path);
+    }
+
+    // Check if batch is complete
+    await checkBatchCompletion(batchId);
+
+  } catch (error) {
+    await handleJobError(batchId, job, error);
+  }
+};
+
+/**
+ * Handle job error with retry logic
+ */
+const handleJobError = async (batchId: string, job: any, error: unknown): Promise<void> => {
+  const db = getDb();
+  const err = error instanceof Error ? error : new Error(String(error));
+  const { code, retriable } = classifyError(err);
+  
+  const currentRetries = job.retry_count || 0;
+
+  // Should retry?
+  if (retriable && currentRetries < MAX_RETRIES) {
+    const delay = BASE_RETRY_DELAY_MS * Math.pow(2, currentRetries);
+    console.log(`[Worker] Job ${job.id} failed (${code}), retry ${currentRetries + 1}/${MAX_RETRIES} in ${delay}ms`);
+    
+    // Reset to pending with incremented retry count
+    await db.update(batchJobs)
+      .set({ 
+        status: 'pending',
+        stage: 'queued',
+        retryCount: currentRetries + 1,
+        progressMessage: `Retry ${currentRetries + 1} after ${code}`,
+      })
+      .where(eq(batchJobs.id, job.id));
+    
+    return;
+  }
+
+  // Mark as failed
+  console.log(`[Worker] Job ${job.id} permanently failed: ${code}`);
+  
+  await db.update(batchJobs)
+    .set({
+      status: 'failed',
+      stage: 'failed',
+      completedAt: new Date(),
+      errorMessage: err.message,
+      errorCode: code,
+    })
+    .where(eq(batchJobs.id, job.id));
+
+  // Update batch counter
+  await db.execute(sql`
+    UPDATE processing_batches 
+    SET failed_pdfs = failed_pdfs + 1 
+    WHERE id = ${batchId}
+  `);
+
+  // Emit failure event
+  const eventId = await incrementEventId(batchId);
+  emitBatchEvent(batchId, {
+    type: 'job_failed',
+    jobId: job.id,
+    sequence: job.sequence,
+    errorCode: code,
+    errorMessage: err.message,
+    retriable: false,
+    retryCount: currentRetries,
+    eventId,
+  });
+
+  // Check if batch is complete
+  await checkBatchCompletion(batchId);
+};
+
+/**
+ * Check if all jobs in a batch are done
+ */
+const checkBatchCompletion = async (batchId: string): Promise<void> => {
+  const db = getDb();
+
+  // Count pending/processing jobs
+  const [pending] = await db
+    .select({ count: sql<number>`count(*)` })
+    .from(batchJobs)
+    .where(sql`
+      ${batchJobs.batchId} = ${batchId} 
+      AND ${batchJobs.status} IN ('pending', 'processing', 'downloading')
+    `);
+
+  if ((pending?.count || 0) > 0) {
+    return; // Still work to do
+  }
+
+  // All jobs done — finalize batch
+  const [batch] = await db
+    .select()
+    .from(processingBatches)
+    .where(eq(processingBatches.id, batchId));
+
+  if (!batch || batch.status === 'completed' || batch.status === 'partial' || batch.status === 'failed') {
+    return; // Already finalized
+  }
+
+  let finalStatus: 'completed' | 'partial' | 'failed';
+  if (batch.failedPdfs === 0) {
+    finalStatus = 'completed';
+  } else if (batch.completedPdfs > 0) {
+    finalStatus = 'partial';
+  } else {
+    finalStatus = 'failed';
+  }
+
+  await db.update(processingBatches)
+    .set({
+      status: finalStatus,
+      completedAt: new Date(),
+    })
+    .where(eq(processingBatches.id, batchId));
+
+  console.log(`[Worker] Batch ${batchId} completed with status: ${finalStatus}`);
+
+  // Emit batch completed
+  const eventId = await incrementEventId(batchId);
+  emitBatchEvent(batchId, {
+    type: 'batch_completed',
+    status: finalStatus,
+    completedJobs: batch.completedPdfs,
+    failedJobs: batch.failedPdfs,
+    totalEvents: await getTotalEventCount(batchId),
+    eventId,
+  });
+
+  // Send email notification if registered
+  await sendCompletionNotification(batchId);
+
+  // Cleanup temp files
+  await cleanupBatchFiles(batchId);
+};
+
+/**
+ * Update job progress and emit SSE event
+ */
+const updateJobProgress = async (
+  batchId: string,
+  jobId: string,
+  sequence: number,
+  stage: string,
+  message: string
+): Promise<void> => {
+  const db = getDb();
+  
+  await db.update(batchJobs)
+    .set({ stage, progressMessage: message })
+    .where(eq(batchJobs.id, jobId));
+
+  const eventId = await incrementEventId(batchId);
+  emitBatchEvent(batchId, {
+    type: 'job_progress',
+    jobId,
+    sequence,
+    stage,
+    message,
+    eventId,
+  });
+};
+
+/**
+ * Increment and return the next event ID for a batch
+ */
+const incrementEventId = async (batchId: string): Promise<number> => {
+  const db = getDb();
+  const [result] = await db.execute(sql`
+    UPDATE processing_batches 
+    SET last_event_id = last_event_id + 1 
+    WHERE id = ${batchId}
+    RETURNING last_event_id
+  `);
+  return (result as any)?.last_event_id || 0;
+};
+
+/**
+ * Get total event count for a batch
+ */
+const getTotalEventCount = async (batchId: string): Promise<number> => {
+  const db = getDb();
+  const [result] = await db
+    .select({ total: sql<number>`COALESCE(SUM(event_count), 0)` })
+    .from(batchJobs)
+    .where(eq(batchJobs.batchId, batchId));
+  return result?.total || 0;
+};
+
+/**
+ * Download PDF from URL
+ */
+const downloadPdf = async (url: string): Promise<ArrayBuffer> => {
+  const response = await fetch(url, {
+    headers: { 'User-Agent': 'HeatSync/2.0' },
+    signal: AbortSignal.timeout(30_000),
+  });
+  
+  if (!response.ok) {
+    throw new Error(`Failed to download: ${response.status}`);
+  }
+  
+  return await response.arrayBuffer();
+};
+
+/**
+ * Classify error for retry logic
+ */
+const classifyError = (error: Error): { code: string; retriable: boolean } => {
+  const msg = error.message.toLowerCase();
+  
+  if (msg.includes('rate limit') || msg.includes('429')) {
+    return { code: 'RATE_LIMIT', retriable: true };
+  }
+  if (msg.includes('timeout') || msg.includes('timed out')) {
+    return { code: 'TIMEOUT', retriable: true };
+  }
+  if (msg.includes('network') || msg.includes('econnrefused')) {
+    return { code: 'NETWORK_ERROR', retriable: true };
+  }
+  if (msg.includes('503') || msg.includes('service unavailable')) {
+    return { code: 'SERVICE_UNAVAILABLE', retriable: true };
+  }
+  if (msg.includes('invalid pdf') || msg.includes('not a pdf')) {
+    return { code: 'INVALID_PDF', retriable: false };
+  }
+  
+  return { code: 'UNKNOWN', retriable: false };
+};
+```
+
+---
+
+## API Implementation
+
+### POST `/api/batch/extract`
+
+Create a new batch. Jobs are inserted into DB — the worker picks them up automatically.
+
+```typescript
+// packages/backend/src/routes/batch.ts
+
 import { Hono } from 'hono';
-import { streamSSE } from 'hono/streaming';
-import { startBatchProcessing, cancelBatch, retryBatch, retryJob } from '@heatsync/backend/services/batchProcessor';
-import { getBatch, getBatchStatus, getBatchResults, createBatch, reconstructEventsSince, subscribeToEvents } from '@heatsync/backend/services/batchProcessor';
+import { getDb } from '@heatsync/backend/db';
+import { processingBatches, batchJobs, createBatchRecord } from '@heatsync/backend/db/schema';
+import { eq } from 'drizzle-orm';
+import { uploadFile } from '@heatsync/backend/services/fileStorage';
 
 export const batchRoutes = new Hono();
 
 const MAX_PDFS_PER_BATCH = parseInt(process.env.MAX_PDFS_PER_BATCH || '15');
 
-// Create batch and start processing
 batchRoutes.post('/extract', async (c) => {
   const formData = await c.req.formData();
   const swimmer = formData.get('swimmer') as string;
   const pdfFiles = formData.getAll('pdfs') as File[];
   const urlsJson = formData.get('urls') as string;
-  const urls = urlsJson ? JSON.parse(urlsJson) : [];
+  const urls: string[] = urlsJson ? JSON.parse(urlsJson) : [];
 
   // Validation
   if (!swimmer?.trim()) {
@@ -424,41 +792,146 @@ batchRoutes.post('/extract', async (c) => {
     return c.json({ success: false, error: 'NO_PDFS', message: 'At least one PDF file or URL is required.' }, 400);
   }
   if (totalPdfs > MAX_PDFS_PER_BATCH) {
-    return c.json({ success: false, error: 'BATCH_TOO_LARGE', message: `Maximum ${MAX_PDFS_PER_BATCH} PDFs per batch. You submitted ${totalPdfs}.` }, 400);
+    return c.json({ 
+      success: false, 
+      error: 'BATCH_TOO_LARGE', 
+      message: `Maximum ${MAX_PDFS_PER_BATCH} PDFs per batch.` 
+    }, 400);
   }
 
-  // Create batch
-  const batch = await createBatch(swimmer, pdfFiles, urls, c.req.header('x-forwarded-for'));
+  // Dedupe URLs
+  const uniqueUrls = [...new Set(urls)];
 
-  // Start background processing (non-blocking)
-  startBatchProcessing(batch.id).catch(console.error);
+  const db = getDb();
+
+  // Create batch record
+  const batchRecord = createBatchRecord(swimmer, pdfFiles.length + uniqueUrls.length, {
+    clientIp: c.req.header('x-forwarded-for') || c.req.header('x-real-ip'),
+    userAgent: c.req.header('user-agent'),
+    referrer: c.req.header('referer'),
+  });
+
+  const [batch] = await db.insert(processingBatches).values(batchRecord).returning();
+  console.log(`[Batch] Created batch ${batch.id} for "${swimmer}" with ${totalPdfs} PDF(s)`);
+
+  // Insert jobs
+  let sequence = 0;
+
+  // File uploads
+  for (const file of pdfFiles) {
+    sequence++;
+    const [job] = await db.insert(batchJobs).values({
+      batchId: batch.id,
+      sequence,
+      sourceType: 'file',
+      filename: file.name,
+      status: 'pending',
+      stage: 'queued',
+    }).returning();
+
+    // Save to temp storage
+    const tempPath = await uploadFile(batch.id, job.id, file);
+    await db.update(batchJobs)
+      .set({ storagePath: tempPath })
+      .where(eq(batchJobs.id, job.id));
+  }
+
+  // URL jobs
+  for (const url of uniqueUrls) {
+    sequence++;
+    await db.insert(batchJobs).values({
+      batchId: batch.id,
+      sequence,
+      sourceType: 'url',
+      sourceUrl: url,
+      filename: url.split('/').pop() || 'heatsheet.pdf',
+      status: 'pending',
+      stage: 'queued',
+    });
+  }
+
+  // Jobs are now in DB — worker will pick them up automatically!
+  // No need to call startBatchProcessing()
+
+  const estMin = totalPdfs * 15;
+  const estMax = totalPdfs * 30;
 
   return c.json({
     success: true,
     batchId: batch.id,
     totalJobs: totalPdfs,
     streamUrl: `/api/batch/${batch.id}/stream`,
+    estimatedTime: `${estMin}s - ${estMax}s`,
   });
 });
+```
 
-// SSE stream with reconnection support
+### GET `/api/batch/:id/stream`
+
+SSE stream for real-time progress. Supports reconnection via `Last-Event-ID`.
+
+```typescript
+import { streamSSE } from 'hono/streaming';
+import { subscribeToBatch } from '@heatsync/backend/services/eventBroadcast';
+
 batchRoutes.get('/:id/stream', async (c) => {
   const batchId = c.req.param('id');
   const lastEventId = parseInt(c.req.header('Last-Event-ID') || '0');
 
   return streamSSE(c, async (stream) => {
-    const batch = await getBatch(batchId);
+    const db = getDb();
+    
+    // Get current batch state
+    const [batch] = await db
+      .select()
+      .from(processingBatches)
+      .where(eq(processingBatches.id, batchId))
+      .limit(1);
+    
     if (!batch) {
-      await stream.writeSSE({ event: 'error', data: JSON.stringify({ error: 'Batch not found' }) });
+      await stream.writeSSE({ 
+        event: 'error', 
+        data: JSON.stringify({ error: 'Batch not found' }) 
+      });
       return;
     }
 
-    // Replay missed events
-    if (lastEventId < batch.lastEventId) {
-      const events = await reconstructEventsSince(batchId, lastEventId);
-      for (const event of events) {
-        await stream.writeSSE({ id: String(event.eventId), event: event.type, data: JSON.stringify(event) });
-      }
+    // Send state sync for reconnecting clients
+    if (lastEventId > 0 || lastEventId < batch.lastEventId) {
+      const jobs = await db
+        .select()
+        .from(batchJobs)
+        .where(eq(batchJobs.batchId, batchId))
+        .orderBy(batchJobs.sequence);
+
+      await stream.writeSSE({
+        id: String(batch.lastEventId),
+        event: 'state_sync',
+        data: JSON.stringify({
+          type: 'state_sync',
+          batch: {
+            id: batch.id,
+            status: batch.status,
+            swimmerName: batch.swimmerNameDisplay,
+            totalPdfs: batch.totalPdfs,
+            completedPdfs: batch.completedPdfs,
+            failedPdfs: batch.failedPdfs,
+          },
+          jobs: jobs.map(j => ({
+            id: j.id,
+            sequence: j.sequence,
+            filename: j.filename,
+            status: j.status,
+            stage: j.stage,
+            resultCode: j.resultCode,
+            meetName: j.meetName,
+            eventCount: j.eventCount,
+            errorMessage: j.errorMessage,
+            cached: j.cached,
+          })),
+          eventId: batch.lastEventId,
+        }),
+      });
     }
 
     // If batch is already done, close stream
@@ -467,79 +940,190 @@ batchRoutes.get('/:id/stream', async (c) => {
     }
 
     // Subscribe to new events
-    await subscribeToEvents(batchId, async (event) => {
-      await stream.writeSSE({ id: String(event.eventId), event: event.type, data: JSON.stringify(event) });
+    const unsubscribe = subscribeToBatch(batchId, async (event) => {
+      try {
+        await stream.writeSSE({
+          id: String(event.eventId),
+          event: event.type,
+          data: JSON.stringify(event),
+        });
+
+        if (['batch_completed', 'batch_cancelled'].includes(event.type)) {
+          unsubscribe();
+        }
+      } catch {
+        unsubscribe();
+      }
     });
+
+    // Keep alive
+    const keepAlive = setInterval(async () => {
+      try {
+        await stream.writeSSE({ comment: 'keepalive' });
+      } catch {
+        clearInterval(keepAlive);
+        unsubscribe();
+      }
+    }, 30000);
+
+    stream.onAbort(() => {
+      clearInterval(keepAlive);
+      unsubscribe();
+    });
+
+    await new Promise(() => {});
   });
-});
-
-// Polling fallback
-batchRoutes.get('/:id', async (c) => {
-  const batchId = c.req.param('id');
-  const status = await getBatchStatus(batchId);
-  if (!status) {
-    return c.json({ success: false, error: 'Batch not found' }, 404);
-  }
-  return c.json({ success: true, ...status });
-});
-
-// Get results
-batchRoutes.get('/:id/results', async (c) => {
-  const batchId = c.req.param('id');
-  const results = await getBatchResults(batchId);
-  if (!results) {
-    return c.json({ success: false, error: 'Batch not found' }, 404);
-  }
-  return c.json({ success: true, ...results });
-});
-
-// Cancel batch
-batchRoutes.post('/:id/cancel', async (c) => {
-  const batchId = c.req.param('id');
-  const result = await cancelBatch(batchId);
-  return c.json({ success: true, cancelledJobs: result.cancelledJobs });
-});
-
-// Retry all failed jobs
-batchRoutes.post('/:id/retry', async (c) => {
-  const batchId = c.req.param('id');
-  const result = await retryBatch(batchId);
-  return c.json({ success: true, retriedJobs: result.retriedJobs });
-});
-
-// Retry specific job
-batchRoutes.post('/:id/jobs/:jobId/retry', async (c) => {
-  const jobId = c.req.param('jobId');
-  await retryJob(jobId);
-  return c.json({ success: true });
 });
 ```
 
-### File: `packages/backend/src/services/batchProcessor.ts`
+### Other Endpoints
 
-Core batch processing logic - see separate detailed spec.
+```typescript
+// GET /api/batch/:id - Polling fallback
+batchRoutes.get('/:id', async (c) => {
+  const batchId = c.req.param('id');
+  const db = getDb();
 
-### File: `packages/backend/src/services/batchWorker.ts`
+  const [batch] = await db
+    .select()
+    .from(processingBatches)
+    .where(eq(processingBatches.id, batchId));
 
-Background worker that processes jobs - see separate detailed spec.
+  if (!batch) {
+    return c.json({ success: false, error: 'Batch not found' }, 404);
+  }
+
+  const jobs = await db
+    .select()
+    .from(batchJobs)
+    .where(eq(batchJobs.batchId, batchId))
+    .orderBy(batchJobs.sequence);
+
+  return c.json({
+    success: true,
+    batch: {
+      id: batch.id,
+      status: batch.status,
+      swimmerName: batch.swimmerNameDisplay,
+      totalPdfs: batch.totalPdfs,
+      completedPdfs: batch.completedPdfs,
+      failedPdfs: batch.failedPdfs,
+      createdAt: batch.createdAt,
+      completedAt: batch.completedAt,
+    },
+    jobs: jobs.map(j => ({
+      id: j.id,
+      sequence: j.sequence,
+      filename: j.filename,
+      status: j.status,
+      stage: j.stage,
+      resultCode: j.resultCode,
+      meetName: j.meetName,
+      eventCount: j.eventCount,
+      errorMessage: j.errorMessage,
+      cached: j.cached,
+    })),
+  });
+});
+
+// POST /api/batch/:id/cancel
+batchRoutes.post('/:id/cancel', async (c) => {
+  const batchId = c.req.param('id');
+  const db = getDb();
+
+  // Mark pending jobs as cancelled
+  await db.update(batchJobs)
+    .set({ status: 'cancelled' })
+    .where(sql`${batchJobs.batchId} = ${batchId} AND ${batchJobs.status} = 'pending'`);
+
+  // Mark batch as cancelled
+  await db.update(processingBatches)
+    .set({ status: 'cancelled', completedAt: new Date() })
+    .where(eq(processingBatches.id, batchId));
+
+  const eventId = await incrementEventId(batchId);
+  emitBatchEvent(batchId, { type: 'batch_cancelled', eventId });
+
+  return c.json({ success: true });
+});
+
+// POST /api/batch/:id/retry - Retry all failed jobs
+batchRoutes.post('/:id/retry', async (c) => {
+  const batchId = c.req.param('id');
+  const db = getDb();
+
+  const result = await db.update(batchJobs)
+    .set({ 
+      status: 'pending', 
+      stage: 'queued',
+      errorMessage: null,
+      errorCode: null,
+    })
+    .where(sql`${batchJobs.batchId} = ${batchId} AND ${batchJobs.status} = 'failed'`)
+    .returning({ id: batchJobs.id });
+
+  // Reset batch counters
+  await db.update(processingBatches)
+    .set({ 
+      status: 'processing',
+      failedPdfs: 0,
+      completedAt: null,
+    })
+    .where(eq(processingBatches.id, batchId));
+
+  return c.json({ success: true, retriedJobs: result.length });
+});
+```
+
+---
+
+## Server Startup
+
+```typescript
+// packages/backend/src/index.ts
+
+import { # Storage init not needed } from '@heatsync/backend/services/fileStorage';
+import { startWorker, stopWorker } from '@heatsync/backend/services/jobWorker';
+import { batchRoutes } from '@heatsync/backend/routes/batch';
+
+const init = async () => {
+  await # Storage init not needed();
+  await runMigrations();
+  
+  // Start the polling worker
+  startWorker();
+};
+
+init().catch(console.error);
+
+// Register routes
+app.route('/api/batch', batchRoutes);
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('[Server] Shutting down...');
+  stopWorker();
+  process.exit(0);
+});
+```
 
 ---
 
 ## Tasks
 
+- [ ] Create `packages/backend/src/services/fileStorage.ts`
+- [ ] Create `packages/backend/src/services/concurrency.ts`
+- [ ] Create `packages/backend/src/services/eventBroadcast.ts`
+- [ ] Create `packages/backend/src/services/jobWorker.ts` (new polling worker)
 - [ ] Create `packages/backend/src/routes/batch.ts`
-- [ ] Create `packages/backend/src/services/batchProcessor.ts`
-- [ ] Create `packages/backend/src/services/batchWorker.ts`
-- [ ] Add progress callback support to `openai.ts` `extractFromPdf()`
-- [ ] Register batch routes in `packages/backend/src/index.ts`
+- [ ] Update `packages/backend/src/index.ts` — start worker, register routes
 - [ ] Add batch types to `packages/shared/src/types.ts`
-- [ ] Implement event reconstruction for SSE reconnection
-- [ ] Implement retry logic with exponential backoff
-- [ ] Test SSE streaming with curl
-- [ ] Test batch creation with multiple files
-- [ ] Test SSE reconnection
-- [ ] Test retry functionality
-- [ ] Test cancellation
+- [ ] Test: Create batch → verify jobs in DB
+- [ ] Test: Worker claims and processes jobs
+- [ ] Test: Restart server → pending jobs resume
+- [ ] Test: SSE reconnection with state sync
+- [ ] Test: Concurrent batches respect global limit
+- [ ] Test: Cancel stops pending jobs
 
 ---
 
@@ -547,50 +1131,75 @@ Background worker that processes jobs - see separate detailed spec.
 
 | File | Description |
 |------|-------------|
-| `packages/backend/src/routes/batch.ts` | Batch API route handlers |
-| `packages/backend/src/services/batchProcessor.ts` | Core batch processing logic |
-| `packages/backend/src/services/batchWorker.ts` | Background worker |
+| `packages/backend/src/services/fileStorage.ts` | Temp file management |
+| `packages/backend/src/services/concurrency.ts` | DB-based concurrency checks |
+| `packages/backend/src/services/eventBroadcast.ts` | SSE event broadcasting |
+| `packages/backend/src/services/jobWorker.ts` | **Postgres polling worker** |
+| `packages/backend/src/routes/batch.ts` | Batch API routes |
 
 ## Files to Modify
 
 | File | Changes |
 |------|---------|
-| `packages/backend/src/index.ts` | Register `/api/batch` routes |
-| `packages/backend/src/services/openai.ts` | Add `onProgress` callback parameter |
-| `packages/shared/src/types.ts` | Add `BatchExtractRequest`, `SSEEvent`, etc. |
+| `packages/backend/src/index.ts` | Start worker, register routes, graceful shutdown |
+| `packages/backend/src/services/openai.ts` | Return extractionId for linking |
+| `packages/shared/src/types.ts` | Add batch types |
+
+---
+
+## Design Notes
+
+### Why Polling Instead of Event-Driven?
+
+Supabase's connection pooler (PgBouncer) runs in transaction mode, which breaks `LISTEN/NOTIFY`. Polling every 2 seconds is:
+- Simple and reliable
+- Works with any Postgres setup
+- Adds minimal load (one small query every 2s)
+
+### Why FOR UPDATE SKIP LOCKED?
+
+This pattern atomically claims a job:
+- `FOR UPDATE` locks the row
+- `SKIP LOCKED` skips rows locked by other workers
+- Combined: each job is claimed by exactly one worker
+
+Even with a single server, this ensures correctness and makes the system ready for future horizontal scaling if needed.
+
+### What Survives Restarts?
+
+| Component | Survives? | Notes |
+|-----------|-----------|-------|
+| Pending jobs | ✅ Yes | In DB, worker picks up on restart |
+| Processing jobs | ✅ Yes | Phase 7 cleanup marks stale jobs as pending |
+| SSE connections | ❌ No | Clients reconnect, get state_sync |
+| Event history | ✅ Yes | `last_event_id` in DB enables replay |
 
 ---
 
 ## Verification
 
 ```bash
-# Test batch creation
+# 1. Create a batch
 curl -X POST http://localhost:3001/api/batch/extract \
   -F "swimmer=John Smith" \
-  -F "urls=[\"https://example.com/heat1.pdf\"]"
+  -F "pdfs=@./test.pdf"
 
-# Test SSE stream
-curl -N http://localhost:3001/api/batch/{batchId}/stream
+# 2. Check jobs in DB
+psql $DATABASE_URL -c "SELECT id, status, stage FROM batch_jobs"
 
-# Should see events like:
-# id: 1
-# event: batch_started
-# data: {"type":"batch_started","batchId":"...","totalJobs":1,"eventId":1}
-#
-# id: 2
-# event: job_progress
-# data: {"type":"job_progress","jobId":"...","stage":"downloading","eventId":2}
+# 3. Watch worker logs — should claim and process
+# [Worker] Claimed job xxx (batch yyy, seq 1)
 
-# Test SSE reconnection
-curl -N http://localhost:3001/api/batch/{batchId}/stream \
-  -H "Last-Event-ID: 2"
-# Should replay events 3+ and continue
+# 4. Kill server mid-processing
+kill -9 $PID
 
-# Test cancel
-curl -X POST http://localhost:3001/api/batch/{batchId}/cancel
+# 5. Restart server, check job resumes
+bun run dev
+# [Worker] Started
+# [Worker] Claimed job xxx ...
 
-# Test retry
-curl -X POST http://localhost:3001/api/batch/{batchId}/retry
+# 6. Verify completion
+curl http://localhost:3001/api/batch/{batchId}
 ```
 
 ---
