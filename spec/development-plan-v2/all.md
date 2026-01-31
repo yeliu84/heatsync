@@ -9,7 +9,7 @@ Enable users to upload multiple PDF heat sheets at once, with real-time progress
 - **Decoupled processing** - Batch processing runs independently of SSE connection (survives disconnects)
 - **Postgres-backed job queue** - Jobs stored in DB, polling worker with `FOR UPDATE SKIP LOCKED` (survives restarts, no Redis needed)
 - **Batch-based API** - Single endpoint creates batch, SSE streams progress
-- **Temp file storage** - Uploaded files persisted to disk for async processing
+- **S3-compatible storage** - Uploaded files stored in Supabase Storage (survives restarts, works on serverless)
 - **Global concurrency control** - Limit concurrent AI calls across all batches (DB-based counting)
 
 ---
@@ -95,17 +95,18 @@ CREATE TABLE batch_jobs (
 
 ### Key Implementation Details
 
-1. **Temp File Storage:** Uploaded files written to `/tmp/heatsync/{batchId}/{jobId}.pdf`
+1. **S3-Compatible Storage:** Uploaded files stored in Supabase Storage (works on serverless/ephemeral)
 2. **Polling Worker:** Background worker polls `batch_jobs` table every 2s using `FOR UPDATE SKIP LOCKED`
 3. **Global Concurrency:** Max 10 concurrent AI calls, enforced by counting active jobs in DB
 4. **SSE Broadcasting:** In-memory EventEmitter for real-time updates
-5. **Restart Resilience:** Jobs persist in DB — server restart resumes pending work automatically
+5. **Restart Resilience:** Jobs + files persist — server restart resumes pending work automatically
 
 ### Files to Create
-- `packages/backend/src/routes/batch.ts` - New route handlers
-- `packages/backend/src/services/batchProcessor.ts` - Batch processing logic
-- `packages/backend/src/services/batchWorker.ts` - Background worker
-- `packages/backend/src/services/tempFiles.ts` - Temp file management
+- `packages/backend/src/routes/batch.ts` - Batch API routes
+- `packages/backend/src/services/jobWorker.ts` - Postgres polling worker
+- `packages/backend/src/services/fileStorage.ts` - S3-compatible storage (Supabase)
+- `packages/backend/src/services/concurrency.ts` - DB-based concurrency control
+- `packages/backend/src/services/eventBroadcast.ts` - SSE event broadcasting
 
 ### Files to Modify
 - `packages/backend/src/index.ts` - Register batch routes, orphan recovery on startup
@@ -114,26 +115,26 @@ CREATE TABLE batch_jobs (
 
 ---
 
-## Phase 3: Meet URL Crawler
+## Phase 3: Meet URL Discovery (GPT-Powered)
 
-**Goal:** Auto-discover heat sheet PDFs from swim meet website URLs
+**Goal:** Auto-discover heat sheet PDFs from swim meet website URLs using GPT
 
 ### New Endpoint
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/discover-heatsheets` | POST | Crawl meet URL, find PDFs |
+| `/api/discover-heatsheets` | POST | Fetch page, use GPT to extract PDF URLs |
 
 ### Key Implementation Details
 
-1. **SSRF Protection:** Block private IPs, internal hostnames, metadata endpoints
-2. **Fetch Limits:** 10s timeout, 10MB max response
-3. **Optional Playwright:** For JavaScript-rendered pages (configurable)
-4. **Platform Detection:** SwimTopia, TeamUnify, Active.com specific patterns
+1. **GPT-Powered Extraction:** Use gpt-4o-mini to analyze HTML and find PDF links
+2. **No Custom Parsing:** Works with any swim meet platform without per-site logic
+3. **SSRF Protection:** Block private IPs, internal hostnames, metadata endpoints
+4. **Low Cost:** ~$0.005 per discovery call
 
 ### Files to Create
-- `packages/backend/src/routes/discover.ts` - Crawler endpoint
-- `packages/backend/src/services/crawler.ts` - HTML parsing logic
+- `packages/backend/src/routes/discover.ts` - Discovery endpoint
+- `packages/backend/src/services/pdfDiscovery.ts` - GPT-powered extraction
 - `packages/backend/src/services/urlValidation.ts` - SSRF protection
 
 ### Files to Modify
@@ -224,10 +225,9 @@ CREATE TABLE batch_jobs (
 | `packages/backend/src/routes/batch.ts` | CREATE batch processing routes |
 | `packages/backend/src/routes/discover.ts` | CREATE meet URL crawler route |
 | `packages/backend/src/routes/admin.ts` | CREATE admin endpoints |
-| `packages/backend/src/services/batchProcessor.ts` | CREATE batch processing logic |
-| `packages/backend/src/services/batchWorker.ts` | CREATE background worker |
-| `packages/backend/src/services/tempFiles.ts` | CREATE temp file management |
-| `packages/backend/src/services/crawler.ts` | CREATE HTML parsing/PDF discovery |
+| `packages/backend/src/services/jobWorker.ts` | CREATE Postgres polling worker |
+| `packages/backend/src/services/fileStorage.ts` | CREATE S3-compatible storage |
+| `packages/backend/src/services/pdfDiscovery.ts` | CREATE GPT-powered PDF extraction |
 | `packages/backend/src/services/urlValidation.ts` | CREATE SSRF protection |
 | `packages/backend/src/services/email.ts` | CREATE email service (Resend) |
 | `packages/backend/src/services/cleanup.ts` | CREATE cleanup service |

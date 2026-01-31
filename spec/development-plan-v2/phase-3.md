@@ -1,6 +1,6 @@
-# Phase 3: Meet URL Crawler
+# Phase 3: Meet URL Discovery (GPT-Powered)
 
-**Goal:** Auto-discover heat sheet PDFs from swim meet website URLs
+**Goal:** Auto-discover heat sheet PDFs from swim meet website URLs using GPT
 
 **Status:** Pending
 
@@ -8,14 +8,25 @@
 
 ---
 
-## Use Case
+## Overview
 
-Instead of manually finding and entering each PDF link, user enters the swim meet website URL (e.g., `https://swimtopia.com/meet/winter-2026`) and we crawl it to find all heat sheet PDFs.
+Instead of building a custom HTML parser/crawler, we use GPT to analyze the page content and extract PDF URLs. This approach is:
 
-**Benefits:**
-- Dramatically better UX - one URL instead of 4-8 PDF links
-- Reduces copy-paste errors
-- Shows all available sessions at once
+- **Simpler** — No need to handle different swim meet platforms (SwimTopia, TeamUnify, etc.)
+- **More robust** — GPT understands context and can find PDFs even with varied page structures
+- **Maintainable** — No brittle CSS selectors or regex patterns to update
+
+---
+
+## How It Works
+
+1. User enters meet website URL
+2. Backend fetches the HTML content
+3. GPT analyzes the HTML and extracts:
+   - Heat sheet PDF URLs
+   - Session names (if identifiable)
+   - Meet name
+4. Return structured list to frontend
 
 ---
 
@@ -26,8 +37,7 @@ Instead of manually finding and entering each PDF link, user enters the swim mee
 **Request:**
 ```typescript
 { 
-  url: string;
-  usePlaywright?: boolean;  // Optional: use headless browser for JS-rendered pages
+  url: string;  // Meet website URL
 }
 ```
 
@@ -35,12 +45,10 @@ Instead of manually finding and entering each PDF link, user enters the swim mee
 ```typescript
 interface DiscoverResponse {
   success: true;
-  meetName?: string;           // Extracted meet name if found
-  platform?: string;           // Detected platform (swimtopia, teamunify, etc.)
+  meetName?: string;
   heatsheets: Array<{
-    url: string;               // Direct PDF link
-    name: string;              // Inferred name (e.g., "Session 1 - Prelims")
-    size?: number;             // File size if HEAD request succeeds
+    url: string;      // Direct PDF link
+    name: string;     // Session name (e.g., "Session 1 - Prelims")
   }>;
 }
 ```
@@ -49,45 +57,217 @@ interface DiscoverResponse {
 ```typescript
 {
   success: false;
-  error: 'INVALID_URL' | 'BLOCKED_URL' | 'FETCH_FAILED' | 'NO_PDFS_FOUND' | 'PAGE_TOO_LARGE' | 'REQUIRES_JAVASCRIPT';
+  error: 'INVALID_URL' | 'BLOCKED_URL' | 'FETCH_FAILED' | 'NO_PDFS_FOUND';
   message: string;
-  hint?: string;  // Helpful suggestion for user
 }
 ```
 
 ---
 
-## SSRF Protection
+## Implementation
 
-**Critical security consideration.** The crawler fetches arbitrary user-provided URLs, which can be exploited to:
-- Access internal services (SSRF attacks)
-- Scan internal networks
-- Access cloud metadata endpoints (AWS/GCP)
+### File: `packages/backend/src/routes/discover.ts`
+
+```typescript
+import { Hono } from 'hono';
+import { isBlockedUrl } from '../services/urlValidation';
+import { discoverHeatsheets } from '../services/pdfDiscovery';
+
+export const discoverRoutes = new Hono();
+
+discoverRoutes.post('/discover-heatsheets', async (c) => {
+  const { url } = await c.req.json<{ url: string }>();
+
+  // Basic validation
+  if (!url || typeof url !== 'string') {
+    return c.json({ success: false, error: 'INVALID_URL', message: 'URL is required' }, 400);
+  }
+
+  // SSRF protection - block internal URLs
+  const validation = isBlockedUrl(url);
+  if (validation.blocked) {
+    return c.json({ success: false, error: 'BLOCKED_URL', message: validation.reason }, 400);
+  }
+
+  try {
+    const result = await discoverHeatsheets(url);
+    
+    if (result.heatsheets.length === 0) {
+      return c.json({ 
+        success: false, 
+        error: 'NO_PDFS_FOUND', 
+        message: 'No heat sheet PDFs found on this page. Try entering PDF URLs directly.' 
+      }, 404);
+    }
+
+    return c.json({
+      success: true,
+      meetName: result.meetName,
+      heatsheets: result.heatsheets,
+    });
+  } catch (error) {
+    console.error('[Discover] Failed:', error);
+    return c.json({ 
+      success: false, 
+      error: 'FETCH_FAILED', 
+      message: 'Failed to fetch the page. Check the URL and try again.' 
+    }, 500);
+  }
+});
+```
+
+### File: `packages/backend/src/services/pdfDiscovery.ts`
+
+```typescript
+import OpenAI from 'openai';
+
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+const FETCH_TIMEOUT_MS = 15000;
+const MAX_HTML_LENGTH = 100000; // ~100KB of HTML
+
+interface DiscoveryResult {
+  meetName?: string;
+  heatsheets: Array<{
+    url: string;
+    name: string;
+  }>;
+}
+
+/**
+ * Fetch page HTML and use GPT to extract heat sheet PDF URLs
+ */
+export const discoverHeatsheets = async (pageUrl: string): Promise<DiscoveryResult> => {
+  // Fetch the page
+  const response = await fetch(pageUrl, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (compatible; HeatSync/2.0; +https://heatsync.now)',
+      'Accept': 'text/html',
+    },
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch page: ${response.status}`);
+  }
+
+  let html = await response.text();
+  
+  // Truncate if too long (save tokens)
+  if (html.length > MAX_HTML_LENGTH) {
+    html = html.slice(0, MAX_HTML_LENGTH) + '\n<!-- truncated -->';
+  }
+
+  // Use GPT to extract PDFs
+  const completion = await openai.chat.completions.create({
+    model: 'gpt-4o-mini',
+    temperature: 0,
+    response_format: { type: 'json_object' },
+    messages: [
+      {
+        role: 'system',
+        content: `You are a helpful assistant that extracts heat sheet PDF URLs from swim meet web pages.
+
+Analyze the HTML and find all links to heat sheet PDFs. Heat sheets are PDF documents containing swim event schedules with heats, lanes, and times.
+
+Look for:
+- Links with .pdf extension
+- Links containing words like "heat", "sheet", "psych", "timeline", "session", "prelim", "final"
+- Links in sections about "documents", "downloads", "heat sheets", "meet info"
+
+Return JSON in this exact format:
+{
+  "meetName": "Name of the swim meet (if found)",
+  "heatsheets": [
+    { "url": "https://example.com/session1.pdf", "name": "Session 1 - Prelims" },
+    { "url": "https://example.com/session2.pdf", "name": "Session 2 - Finals" }
+  ]
+}
+
+Rules:
+- Return absolute URLs (resolve relative URLs against the page URL)
+- If you can't determine a session name, use the filename or "Heat Sheet N"
+- Exclude non-heat-sheet PDFs (entry forms, meet info, etc.) if distinguishable
+- Return empty heatsheets array if no PDFs found
+- meetName can be null if not found`
+      },
+      {
+        role: 'user',
+        content: `Page URL: ${pageUrl}\n\nHTML content:\n${html}`
+      }
+    ],
+  });
+
+  const content = completion.choices[0]?.message?.content;
+  if (!content) {
+    throw new Error('No response from GPT');
+  }
+
+  try {
+    const result = JSON.parse(content) as DiscoveryResult;
+    
+    // Validate and resolve URLs
+    const baseUrl = new URL(pageUrl);
+    result.heatsheets = result.heatsheets
+      .map(hs => ({
+        ...hs,
+        url: resolveUrl(hs.url, baseUrl),
+      }))
+      .filter(hs => isValidPdfUrl(hs.url));
+
+    return result;
+  } catch (e) {
+    console.error('[Discovery] Failed to parse GPT response:', content);
+    throw new Error('Failed to parse discovery results');
+  }
+};
+
+/**
+ * Resolve relative URL to absolute
+ */
+const resolveUrl = (url: string, base: URL): string => {
+  try {
+    return new URL(url, base).toString();
+  } catch {
+    return url;
+  }
+};
+
+/**
+ * Basic validation that URL looks like a PDF
+ */
+const isValidPdfUrl = (url: string): boolean => {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'https:' || parsed.protocol === 'http:';
+  } catch {
+    return false;
+  }
+};
+```
 
 ### File: `packages/backend/src/services/urlValidation.ts`
 
 ```typescript
-import { URL } from 'url';
+/**
+ * Basic SSRF protection - block internal/private URLs
+ */
 
 const BLOCKED_HOSTS = [
   'localhost',
   '127.0.0.1',
   '0.0.0.0',
   '::1',
-  '[::1]',
   'metadata.google.internal',
-  'metadata.google.com',
-  '169.254.169.254',           // AWS/GCP metadata
-  '169.254.170.2',             // AWS ECS metadata
-  'instance-data',             // Azure metadata
+  '169.254.169.254',  // Cloud metadata
 ];
 
-const BLOCKED_HOST_PATTERNS = [
-  /\.internal$/i,              // *.internal
-  /\.local$/i,                 // *.local
-  /\.localhost$/i,             // *.localhost
-  /\.corp$/i,                  // *.corp
-  /\.lan$/i,                   // *.lan
+const BLOCKED_PATTERNS = [
+  /^10\./,            // 10.x.x.x
+  /^172\.(1[6-9]|2\d|3[01])\./,  // 172.16-31.x.x
+  /^192\.168\./,      // 192.168.x.x
+  /\.internal$/i,
+  /\.local$/i,
 ];
 
 export interface UrlValidationResult {
@@ -99,546 +279,52 @@ export const isBlockedUrl = (urlString: string): UrlValidationResult => {
   try {
     const url = new URL(urlString);
     
-    // Block non-HTTP(S) protocols
+    // Check protocol
     if (!['http:', 'https:'].includes(url.protocol)) {
       return { blocked: true, reason: 'Only HTTP/HTTPS URLs allowed' };
     }
-    
-    // Block explicit internal hostnames
+
+    // Check hostname
     const hostname = url.hostname.toLowerCase();
+    
     if (BLOCKED_HOSTS.includes(hostname)) {
-      return { blocked: true, reason: 'Internal hostname not allowed' };
+      return { blocked: true, reason: 'Internal URLs not allowed' };
     }
-    
-    // Block pattern-based hostnames
-    for (const pattern of BLOCKED_HOST_PATTERNS) {
+
+    for (const pattern of BLOCKED_PATTERNS) {
       if (pattern.test(hostname)) {
-        return { blocked: true, reason: 'Internal hostname not allowed' };
+        return { blocked: true, reason: 'Private network URLs not allowed' };
       }
     }
-    
-    // Block private IP ranges
-    const ipMatch = hostname.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
-    if (ipMatch) {
-      const [, a, b, c, d] = ipMatch.map(Number);
-      
-      // 10.0.0.0/8
-      if (a === 10) return { blocked: true, reason: 'Private IP not allowed' };
-      
-      // 172.16.0.0/12
-      if (a === 172 && b >= 16 && b <= 31) return { blocked: true, reason: 'Private IP not allowed' };
-      
-      // 192.168.0.0/16
-      if (a === 192 && b === 168) return { blocked: true, reason: 'Private IP not allowed' };
-      
-      // 127.0.0.0/8
-      if (a === 127) return { blocked: true, reason: 'Loopback IP not allowed' };
-      
-      // 169.254.0.0/16 (link-local)
-      if (a === 169 && b === 254) return { blocked: true, reason: 'Link-local IP not allowed' };
-      
-      // 0.0.0.0/8
-      if (a === 0) return { blocked: true, reason: 'Invalid IP' };
-    }
-    
-    // Block IPv6 private ranges (simplified)
-    if (hostname.startsWith('[')) {
-      const ipv6 = hostname.slice(1, -1).toLowerCase();
-      if (ipv6.startsWith('fc') || ipv6.startsWith('fd') || ipv6.startsWith('fe80')) {
-        return { blocked: true, reason: 'Private IPv6 not allowed' };
-      }
-    }
-    
+
     return { blocked: false };
   } catch {
     return { blocked: true, reason: 'Invalid URL format' };
   }
 };
-
-/**
- * Safe fetch with SSRF protection, timeouts, and size limits
- */
-export const safeFetch = async (
-  url: string,
-  options: {
-    timeoutMs?: number;
-    maxSizeBytes?: number;
-    method?: 'GET' | 'HEAD';
-  } = {}
-): Promise<Response> => {
-  const {
-    timeoutMs = 10_000,
-    maxSizeBytes = 10 * 1024 * 1024, // 10MB
-    method = 'GET',
-  } = options;
-
-  // Validate URL
-  const { blocked, reason } = isBlockedUrl(url);
-  if (blocked) {
-    throw new Error(reason || 'URL blocked');
-  }
-
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    const response = await fetch(url, {
-      method,
-      headers: {
-        // Mimic a real browser to avoid bot detection
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.5',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'Connection': 'keep-alive',
-        'Upgrade-Insecure-Requests': '1',
-        'Sec-Fetch-Dest': 'document',
-        'Sec-Fetch-Mode': 'navigate',
-        'Sec-Fetch-Site': 'none',
-        'Sec-Fetch-User': '?1',
-      },
-      signal: controller.signal,
-      redirect: 'follow',
-    });
-
-    // Check response size
-    const contentLength = parseInt(response.headers.get('content-length') || '0');
-    if (contentLength > maxSizeBytes) {
-      throw new Error(`Page too large: ${(contentLength / 1024 / 1024).toFixed(1)}MB exceeds limit`);
-    }
-
-    // Verify final URL after redirects isn't blocked
-    const finalUrl = response.url;
-    const { blocked: finalBlocked, reason: finalReason } = isBlockedUrl(finalUrl);
-    if (finalBlocked) {
-      throw new Error(`Redirect to blocked URL: ${finalReason}`);
-    }
-
-    return response;
-  } finally {
-    clearTimeout(timeoutId);
-  }
-};
 ```
 
 ---
 
-## Crawler Implementation
+## Cost Considerations
 
-### File: `packages/backend/src/services/crawler.ts`
-
-```typescript
-import * as cheerio from 'cheerio';
-import { isBlockedUrl, safeFetch } from './urlValidation';
-
-export interface DiscoveredHeatsheet {
-  url: string;
-  name: string;
-  size?: number;
-}
-
-export interface CrawlResult {
-  meetName?: string;
-  platform?: string;
-  heatsheets: DiscoveredHeatsheet[];
-}
-
-// Platform detection patterns
-const PLATFORMS = {
-  swimtopia: {
-    urlMatch: /swimtopia\.com/i,
-    pdfSelector: 'a[href*="/files/"], a[href$=".pdf"]',
-    meetNameSelector: 'h1.meet-name, .meet-header h1, h1',
-  },
-  teamunify: {
-    urlMatch: /teamunify\.com|swimmingrank\.com/i,
-    pdfSelector: 'a[href*="document"], a[href$=".pdf"]',
-    meetNameSelector: '.meet-name, #meet-title, h1',
-  },
-  active: {
-    urlMatch: /active\.com/i,
-    pdfSelector: '.documents a[href$=".pdf"], a[href$=".pdf"]',
-    meetNameSelector: 'h1.event-title, h1',
-  },
-  swimconnection: {
-    urlMatch: /swimconnection\.com/i,
-    pdfSelector: 'a[href$=".pdf"]',
-    meetNameSelector: '.meet-name, h1',
-  },
-  generic: {
-    urlMatch: /.*/,
-    pdfSelector: 'a[href$=".pdf"], a[href*=".pdf?"]',
-    meetNameSelector: 'h1, title',
-  },
-};
-
-/**
- * Detect platform from URL
- */
-const detectPlatform = (url: string): keyof typeof PLATFORMS => {
-  for (const [name, config] of Object.entries(PLATFORMS)) {
-    if (name !== 'generic' && config.urlMatch.test(url)) {
-      return name as keyof typeof PLATFORMS;
-    }
-  }
-  return 'generic';
-};
-
-/**
- * Normalize PDF URL (handle relative paths, query strings, etc.)
- */
-const normalizePdfUrl = (href: string, baseUrl: string): string | null => {
-  try {
-    let url: URL;
-    
-    if (href.startsWith('http://') || href.startsWith('https://')) {
-      url = new URL(href);
-    } else if (href.startsWith('//')) {
-      url = new URL(`https:${href}`);
-    } else {
-      url = new URL(href, baseUrl);
-    }
-    
-    // Remove fragments
-    url.hash = '';
-    
-    // Validate the resulting URL
-    if (isBlockedUrl(url.href).blocked) {
-      return null;
-    }
-    
-    return url.href;
-  } catch {
-    return null;
-  }
-};
-
-/**
- * Infer a readable name from link context
- */
-const inferName = (
-  $: cheerio.CheerioAPI,
-  link: cheerio.Element,
-  href: string
-): string => {
-  // Try link text first
-  const linkText = $(link).text().trim();
-  if (linkText && linkText.length > 2 && linkText.length < 100) {
-    return linkText;
-  }
-  
-  // Try title attribute
-  const title = $(link).attr('title');
-  if (title) {
-    return title;
-  }
-  
-  // Try parent context
-  const parentText = $(link).parent().text().trim();
-  if (parentText && parentText.length > 2 && parentText.length < 100) {
-    return parentText;
-  }
-  
-  // Fall back to filename
-  const filename = href.split('/').pop()?.split('?')[0] || 'Heat Sheet';
-  return filename.replace(/\.pdf$/i, '').replace(/[_-]/g, ' ');
-};
-
-/**
- * Check if a link looks like a heat sheet (not a random PDF)
- */
-const isLikelyHeatSheet = (href: string, text: string): boolean => {
-  const combined = `${href} ${text}`.toLowerCase();
-  
-  const heatSheetPatterns = [
-    /heat/i,
-    /sheet/i,
-    /psych/i,
-    /timeline/i,
-    /program/i,
-    /session/i,
-    /prelim/i,
-    /final/i,
-    /schedule/i,
-    /entries/i,
-  ];
-  
-  const excludePatterns = [
-    /waiver/i,
-    /registration/i,
-    /application/i,
-    /flyer/i,
-    /map/i,
-    /hotel/i,
-    /parking/i,
-    /volunteer/i,
-  ];
-  
-  // Exclude non-heat-sheet PDFs
-  if (excludePatterns.some(p => p.test(combined))) {
-    return false;
-  }
-  
-  // Include if matches heat sheet patterns
-  if (heatSheetPatterns.some(p => p.test(combined))) {
-    return true;
-  }
-  
-  // Include generic PDFs (might be heat sheets)
-  return true;
-};
-
-/**
- * Get file sizes for PDFs via HEAD requests
- */
-const enrichWithSizes = async (
-  heatsheets: DiscoveredHeatsheet[]
-): Promise<DiscoveredHeatsheet[]> => {
-  const results = await Promise.allSettled(
-    heatsheets.map(async (sheet) => {
-      try {
-        const response = await safeFetch(sheet.url, {
-          method: 'HEAD',
-          timeoutMs: 3000,
-        });
-        const size = parseInt(response.headers.get('content-length') || '0');
-        return { ...sheet, size };
-      } catch {
-        return sheet;
-      }
-    })
-  );
-  
-  return results.map((r, i) => 
-    r.status === 'fulfilled' ? r.value : heatsheets[i]
-  );
-};
-
-/**
- * Discover heat sheets from a meet URL
- */
-export const discoverHeatsheets = async (url: string): Promise<CrawlResult> => {
-  // 1. Validate URL
-  const { blocked, reason } = isBlockedUrl(url);
-  if (blocked) {
-    throw new Error(reason || 'URL not allowed');
-  }
-
-  // 2. Detect platform
-  const platform = detectPlatform(url);
-  const config = PLATFORMS[platform];
-  console.log(`[Crawler] Platform detected: ${platform}`);
-
-  // 3. Fetch HTML
-  const response = await safeFetch(url);
-  if (!response.ok) {
-    throw new Error(`Failed to fetch: ${response.status} ${response.statusText}`);
-  }
-  
-  const html = await response.text();
-  
-  // 4. Check for JavaScript-heavy pages
-  if (html.includes('__NEXT_DATA__') || html.includes('window.__INITIAL_STATE__')) {
-    console.log('[Crawler] Page appears to use JavaScript rendering');
-    // Could add Playwright fallback here
-  }
-  
-  const $ = cheerio.load(html);
-
-  // 5. Extract meet name
-  let meetName: string | undefined;
-  const meetNameEl = $(config.meetNameSelector).first();
-  if (meetNameEl.length) {
-    meetName = meetNameEl.text().trim();
-    if (meetName.length > 200) meetName = meetName.slice(0, 200);
-  }
-
-  // 6. Extract PDF links
-  const pdfLinks: { url: string; name: string }[] = [];
-  const seenUrls = new Set<string>();
-  
-  $(config.pdfSelector).each((_, el) => {
-    const href = $(el).attr('href');
-    if (!href) return;
-    
-    const normalizedUrl = normalizePdfUrl(href, url);
-    if (!normalizedUrl) return;
-    
-    // Deduplicate
-    if (seenUrls.has(normalizedUrl)) return;
-    seenUrls.add(normalizedUrl);
-    
-    const name = inferName($, el, href);
-    
-    // Filter to likely heat sheets
-    if (!isLikelyHeatSheet(normalizedUrl, name)) {
-      console.log(`[Crawler] Skipping non-heat-sheet: ${name}`);
-      return;
-    }
-    
-    pdfLinks.push({ url: normalizedUrl, name });
-  });
-
-  console.log(`[Crawler] Found ${pdfLinks.length} PDF link(s)`);
-
-  // 7. Enrich with file sizes
-  const heatsheets = await enrichWithSizes(pdfLinks);
-
-  return { meetName, platform, heatsheets };
-};
-
-/**
- * Discover heat sheets using Playwright (for JS-rendered pages)
- * This is optional and requires Playwright to be installed
- */
-export const discoverHeatsheetsWithPlaywright = async (url: string): Promise<CrawlResult> => {
-  // Lazy import to avoid bundling Playwright when not used
-  const { chromium } = await import('playwright');
-  
-  const browser = await chromium.launch({ 
-    headless: true,
-    args: ['--no-sandbox', '--disable-setuid-sandbox'],
-  });
-  
-  try {
-    const page = await browser.newPage();
-    await page.goto(url, { 
-      waitUntil: 'networkidle',
-      timeout: 30_000,
-    });
-    
-    const html = await page.content();
-    await browser.close();
-    
-    // Parse with cheerio (same logic as above)
-    const $ = cheerio.load(html);
-    // ... same extraction logic
-    
-    return { meetName: undefined, platform: 'playwright', heatsheets: [] };
-  } finally {
-    await browser.close();
-  }
-};
-```
-
----
-
-## Route Handler
-
-### File: `packages/backend/src/routes/discover.ts`
-
-```typescript
-import { Hono } from 'hono';
-import { discoverHeatsheets, discoverHeatsheetsWithPlaywright } from '@heatsync/backend/services/crawler';
-import { isBlockedUrl } from '@heatsync/backend/services/urlValidation';
-
-export const discoverRoutes = new Hono();
-
-discoverRoutes.post('/discover-heatsheets', async (c) => {
-  const body = await c.req.json();
-  const { url, usePlaywright = false } = body;
-
-  // Validate URL presence
-  if (!url || typeof url !== 'string') {
-    return c.json({ 
-      success: false, 
-      error: 'INVALID_URL', 
-      message: 'URL is required',
-      hint: 'Enter the URL of the swim meet website',
-    }, 400);
-  }
-
-  // Validate URL format
-  try {
-    new URL(url);
-  } catch {
-    return c.json({ 
-      success: false, 
-      error: 'INVALID_URL', 
-      message: 'Invalid URL format',
-      hint: 'Make sure the URL starts with http:// or https://',
-    }, 400);
-  }
-
-  // Check for blocked URLs
-  const { blocked, reason } = isBlockedUrl(url);
-  if (blocked) {
-    return c.json({ 
-      success: false, 
-      error: 'BLOCKED_URL', 
-      message: reason || 'URL not allowed',
-    }, 400);
-  }
-
-  try {
-    const usePlaywrightEnabled = usePlaywright && process.env.USE_PLAYWRIGHT_CRAWLER === 'true';
-    
-    const result = usePlaywrightEnabled
-      ? await discoverHeatsheetsWithPlaywright(url)
-      : await discoverHeatsheets(url);
-
-    if (result.heatsheets.length === 0) {
-      return c.json({ 
-        success: false, 
-        error: 'NO_PDFS_FOUND', 
-        message: 'No heat sheet PDFs found on this page.',
-        hint: 'Try the direct link to the heat sheets page, or add PDF URLs manually.',
-      }, 404);
-    }
-
-    return c.json({ 
-      success: true, 
-      meetName: result.meetName,
-      platform: result.platform,
-      heatsheets: result.heatsheets,
-    });
-    
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    console.error(`[Discover] Error crawling ${url}:`, message);
-    
-    if (message.includes('timeout') || message.includes('abort')) {
-      return c.json({ 
-        success: false, 
-        error: 'FETCH_FAILED', 
-        message: 'Request timed out. The page took too long to load.',
-        hint: 'The website might be slow or blocking automated requests.',
-      }, 504);
-    }
-    
-    if (message.includes('too large')) {
-      return c.json({ 
-        success: false, 
-        error: 'PAGE_TOO_LARGE', 
-        message,
-        hint: 'Try a more specific page with just the heat sheet links.',
-      }, 413);
-    }
-    
-    return c.json({ 
-      success: false, 
-      error: 'FETCH_FAILED', 
-      message,
-      hint: 'Check the URL and try again, or add PDF URLs manually.',
-    }, 500);
-  }
-});
-```
+Using `gpt-4o-mini` keeps costs low:
+- Input: ~$0.15 per 1M tokens
+- Output: ~$0.60 per 1M tokens
+- Typical page: 20-50K tokens input, 500 tokens output
+- **Cost per discovery: ~$0.003-0.008** (less than 1 cent)
 
 ---
 
 ## Tasks
 
-- [ ] Add `cheerio` dependency: `bun add cheerio`
-- [ ] Create `packages/backend/src/services/urlValidation.ts`
-- [ ] Create `packages/backend/src/services/crawler.ts`
 - [ ] Create `packages/backend/src/routes/discover.ts`
-- [ ] Register discover route in `packages/backend/src/index.ts`
-- [ ] Add types to `packages/shared/src/types.ts`
-- [ ] Test SSRF protection with internal URLs
-- [ ] Test with real swim meet URLs (SwimTopia, TeamUnify)
-- [ ] Test with JavaScript-heavy pages
-- [ ] Consider adding Playwright for JS rendering (optional)
+- [ ] Create `packages/backend/src/services/pdfDiscovery.ts`
+- [ ] Create `packages/backend/src/services/urlValidation.ts`
+- [ ] Register discover routes in `packages/backend/src/index.ts`
+- [ ] Test with various swim meet platforms (SwimTopia, TeamUnify, Active.com)
+- [ ] Test SSRF protection
+- [ ] Add rate limiting (optional)
 
 ---
 
@@ -646,92 +332,60 @@ discoverRoutes.post('/discover-heatsheets', async (c) => {
 
 | File | Description |
 |------|-------------|
-| `packages/backend/src/services/urlValidation.ts` | URL validation and SSRF protection |
-| `packages/backend/src/services/crawler.ts` | HTML parsing and PDF discovery logic |
-| `packages/backend/src/routes/discover.ts` | API endpoint handler |
+| `packages/backend/src/routes/discover.ts` | Discovery endpoint |
+| `packages/backend/src/services/pdfDiscovery.ts` | GPT-powered PDF extraction |
+| `packages/backend/src/services/urlValidation.ts` | SSRF protection |
 
 ## Files to Modify
 
 | File | Changes |
 |------|---------|
-| `packages/backend/src/index.ts` | Register `/api/discover-heatsheets` route |
-| `packages/shared/src/types.ts` | Add `DiscoverResponse` type |
-| `package.json` | Add `cheerio` dependency |
+| `packages/backend/src/index.ts` | Register discover routes |
 
 ---
 
 ## Verification
 
 ```bash
-# Test with valid swim meet URL
+# Test with SwimTopia meet page
 curl -X POST http://localhost:3001/api/discover-heatsheets \
   -H "Content-Type: application/json" \
-  -d '{"url": "https://www.swimtopia.com/meets/winter-championships"}'
+  -d '{"url": "https://www.swimtopia.com/some-meet"}'
 
 # Expected response:
 {
   "success": true,
   "meetName": "Winter Championships 2026",
-  "platform": "swimtopia",
   "heatsheets": [
-    { "url": "https://...", "name": "Session 1 - Friday Prelims", "size": 2456789 },
-    { "url": "https://...", "name": "Session 2 - Friday Finals", "size": 1834567 }
+    { "url": "https://..../session1.pdf", "name": "Session 1 - Friday Prelims" },
+    { "url": "https://..../session2.pdf", "name": "Session 2 - Friday Finals" }
   ]
 }
 
-# Test SSRF protection - should be blocked
-curl -X POST http://localhost:3001/api/discover-heatsheets \
-  -H "Content-Type: application/json" \
-  -d '{"url": "http://localhost:8080"}'
-# Expected: { "success": false, "error": "BLOCKED_URL" }
-
+# Test SSRF protection
 curl -X POST http://localhost:3001/api/discover-heatsheets \
   -H "Content-Type: application/json" \
   -d '{"url": "http://169.254.169.254/latest/meta-data/"}'
-# Expected: { "success": false, "error": "BLOCKED_URL" }
 
-curl -X POST http://localhost:3001/api/discover-heatsheets \
-  -H "Content-Type: application/json" \
-  -d '{"url": "http://192.168.1.1"}'
-# Expected: { "success": false, "error": "BLOCKED_URL" }
-
-# Test with invalid URL
-curl -X POST http://localhost:3001/api/discover-heatsheets \
-  -H "Content-Type: application/json" \
-  -d '{"url": "not-a-url"}'
-# Expected: { "success": false, "error": "INVALID_URL" }
-
-# Test with page that has no PDFs
-curl -X POST http://localhost:3001/api/discover-heatsheets \
-  -H "Content-Type: application/json" \
-  -d '{"url": "https://example.com"}'
-# Expected: { "success": false, "error": "NO_PDFS_FOUND", "hint": "..." }
+# Expected: 400 with BLOCKED_URL error
 ```
 
 ---
 
-## Known Limitations
+## Design Notes
 
-1. **JavaScript-rendered pages**: Cheerio can't execute JavaScript. Pages that load content dynamically won't work without Playwright.
-   - **Mitigation**: Add optional Playwright mode, document limitation clearly
+### Why GPT instead of custom crawler?
 
-2. **Authentication-required pages**: Can't access PDFs behind login.
-   - **Mitigation**: Clear error message suggesting manual entry
+| Approach | Pros | Cons |
+|----------|------|------|
+| Custom crawler | No API cost, faster | Brittle, needs per-platform logic, maintenance burden |
+| GPT extraction | Handles any page structure, self-adapts | API cost (~$0.005/call), slightly slower |
 
-3. **Bot detection**: Some sites block automated requests.
-   - **Mitigation**: Use realistic browser headers, consider rotating user agents
+For a side project with moderate traffic, GPT extraction wins on simplicity and maintainability.
 
-4. **Rate limiting**: Some sites may rate limit requests.
-   - **Mitigation**: Cache results, implement backoff
+### Future: Caching
 
----
-
-## Future Improvements
-
-1. **Playwright integration**: Add optional headless browser for JS-heavy sites
-2. **Platform-specific scrapers**: More refined extraction for common platforms
-3. **Caching**: Cache discovered PDFs for a short period
-4. **Session cookie support**: Allow user to provide cookies for authenticated pages
+If the same meet URL is requested multiple times, we could cache the discovery results in DB for 1 hour to reduce API calls.
 
 ---
 

@@ -40,107 +40,150 @@
 
 ---
 
-## Temp File Management
+## File Storage (S3-Compatible)
 
 ### Problem
-When a user uploads files via multipart form data, the `File` objects exist only during the request. If we return early, the files are gone.
+When a user uploads files via multipart form data, the `File` objects exist only during the request. Local temp files don't work on serverless/ephemeral containers.
 
 ### Solution
-Write uploaded files to temp storage immediately, store paths in DB.
+Upload files to S3-compatible storage (Supabase Storage) immediately. Store the storage path in DB.
 
-### File: `packages/backend/src/services/tempFiles.ts`
+**Why S3-compatible?**
+- Works with any deployment (serverless, containers, VPS)
+- Supabase Storage is already available (same project)
+- Survives server restarts
+- Can set TTL policies for automatic cleanup
+
+### File: `packages/backend/src/services/fileStorage.ts`
 
 ```typescript
-import { mkdir, rm, readdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { createClient } from '@supabase/supabase-js';
 
-const TEMP_DIR = process.env.TEMP_FILE_DIR || '/tmp/heatsync';
+const supabase = createClient(
+  process.env.SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!
+);
+
+const BUCKET_NAME = process.env.STORAGE_BUCKET || 'heatsync-uploads';
+const UPLOAD_TTL_DAYS = 7; // Files auto-deleted after 7 days
 
 /**
- * Ensure temp directory exists
+ * Get the storage path for a job's PDF
  */
-export const ensureTempDir = async (): Promise<void> => {
-  await mkdir(TEMP_DIR, { recursive: true });
+export const getStoragePath = (batchId: string, jobId: string): string => {
+  return `batches/${batchId}/${jobId}.pdf`;
 };
 
 /**
- * Get batch temp directory path
+ * Upload a file to S3-compatible storage
  */
-export const getBatchTempDir = (batchId: string): string => {
-  return join(TEMP_DIR, batchId);
-};
-
-/**
- * Save uploaded file to temp storage
- */
-export const saveTempFile = async (
+export const uploadFile = async (
   batchId: string,
   jobId: string,
   file: File
 ): Promise<string> => {
-  const batchDir = getBatchTempDir(batchId);
-  await mkdir(batchDir, { recursive: true });
-  
-  const filePath = join(batchDir, `${jobId}.pdf`);
+  const path = getStoragePath(batchId, jobId);
   const buffer = await file.arrayBuffer();
-  await Bun.write(filePath, buffer);
   
-  console.log(`[TempFiles] Saved ${file.name} to ${filePath}`);
-  return filePath;
+  const { error } = await supabase.storage
+    .from(BUCKET_NAME)
+    .upload(path, buffer, {
+      contentType: 'application/pdf',
+      upsert: true,
+    });
+
+  if (error) {
+    throw new Error(`Failed to upload file: ${error.message}`);
+  }
+
+  console.log(`[Storage] Uploaded ${file.name} to ${path}`);
+  return path;
 };
 
 /**
- * Read temp file as ArrayBuffer
+ * Download a file from storage as ArrayBuffer
  */
-export const readTempFile = async (filePath: string): Promise<ArrayBuffer> => {
-  const file = Bun.file(filePath);
-  return await file.arrayBuffer();
+export const downloadFile = async (storagePath: string): Promise<ArrayBuffer> => {
+  const { data, error } = await supabase.storage
+    .from(BUCKET_NAME)
+    .download(storagePath);
+
+  if (error || !data) {
+    throw new Error(`Failed to download file: ${error?.message || 'No data'}`);
+  }
+
+  return await data.arrayBuffer();
 };
 
 /**
- * Delete batch temp directory
+ * Delete a single file from storage
  */
-export const cleanupBatchTempFiles = async (batchId: string): Promise<void> => {
-  const batchDir = getBatchTempDir(batchId);
-  try {
-    await rm(batchDir, { recursive: true, force: true });
-    console.log(`[TempFiles] Cleaned up ${batchDir}`);
-  } catch (error) {
-    console.error(`[TempFiles] Failed to cleanup ${batchDir}:`, error);
+export const deleteFile = async (storagePath: string): Promise<void> => {
+  const { error } = await supabase.storage
+    .from(BUCKET_NAME)
+    .remove([storagePath]);
+
+  if (error) {
+    console.error(`[Storage] Failed to delete ${storagePath}:`, error.message);
   }
 };
 
 /**
- * Delete single temp file
+ * Delete all files for a batch
  */
-export const deleteTempFile = async (filePath: string): Promise<void> => {
-  try {
-    await rm(filePath, { force: true });
-  } catch {
-    // Ignore if file doesn't exist
+export const cleanupBatchFiles = async (batchId: string): Promise<void> => {
+  const prefix = `batches/${batchId}/`;
+  
+  // List all files in batch folder
+  const { data: files, error: listError } = await supabase.storage
+    .from(BUCKET_NAME)
+    .list(`batches/${batchId}`);
+
+  if (listError || !files?.length) {
+    return; // No files to delete
+  }
+
+  const paths = files.map(f => `${prefix}${f.name}`);
+  
+  const { error } = await supabase.storage
+    .from(BUCKET_NAME)
+    .remove(paths);
+
+  if (error) {
+    console.error(`[Storage] Failed to cleanup batch ${batchId}:`, error.message);
+  } else {
+    console.log(`[Storage] Cleaned up ${paths.length} files for batch ${batchId}`);
   }
 };
 
 /**
- * Cleanup orphaned temp directories
+ * Get a signed URL for direct download (optional, for debugging)
  */
-export const cleanupOrphanedTempFiles = async (
-  isOrphaned: (batchId: string) => Promise<boolean>
-): Promise<number> => {
-  let cleaned = 0;
-  try {
-    const entries = await readdir(TEMP_DIR);
-    for (const batchId of entries) {
-      if (await isOrphaned(batchId)) {
-        await cleanupBatchTempFiles(batchId);
-        cleaned++;
-      }
-    }
-  } catch {
-    // Temp dir might not exist yet
+export const getSignedUrl = async (storagePath: string, expiresIn = 3600): Promise<string> => {
+  const { data, error } = await supabase.storage
+    .from(BUCKET_NAME)
+    .createSignedUrl(storagePath, expiresIn);
+
+  if (error || !data) {
+    throw new Error(`Failed to create signed URL: ${error?.message}`);
   }
-  return cleaned;
+
+  return data.signedUrl;
 };
+```
+
+### Supabase Storage Setup
+
+1. Create a bucket named `heatsync-uploads` in Supabase Dashboard
+2. Set bucket to **private** (no public access)
+3. Add lifecycle rule to auto-delete files older than 7 days (optional)
+
+### Environment Variables
+
+```bash
+SUPABASE_URL=https://xxx.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=eyJhbGc...  # Service role key (not anon key)
+STORAGE_BUCKET=heatsync-uploads
 ```
 
 ---
@@ -280,7 +323,7 @@ import { processingBatches, batchJobs } from '@heatsync/backend/db/schema';
 import { eq, and, sql, or } from 'drizzle-orm';
 import { emitBatchEvent } from './eventBroadcast';
 import { canStartGlobalJob, canStartBatchJob } from './concurrency';
-import { readTempFile, deleteTempFile, cleanupBatchTempFiles } from './tempFiles';
+import { downloadFile, deleteFile, cleanupBatchFiles } from './fileStorage';
 import { extractFromPdf } from './openai';
 import { sendCompletionNotification } from './email';
 
@@ -417,7 +460,7 @@ const processJob = async (job: any): Promise<void> => {
       await updateJobProgress(batchId, job.id, job.sequence, 'downloading', 'Downloading PDF...');
       buffer = await downloadPdf(job.source_url);
     } else {
-      buffer = await readTempFile(job.temp_file_path);
+      buffer = await downloadFile(job.storage_path);
     }
 
     // Extract with AI
@@ -463,8 +506,8 @@ const processJob = async (job: any): Promise<void> => {
     });
 
     // Cleanup temp file
-    if (job.temp_file_path) {
-      await deleteTempFile(job.temp_file_path);
+    if (job.storage_path) {
+      await deleteFile(job.storage_path);
     }
 
     // Check if batch is complete
@@ -602,7 +645,7 @@ const checkBatchCompletion = async (batchId: string): Promise<void> => {
   await sendCompletionNotification(batchId);
 
   // Cleanup temp files
-  await cleanupBatchTempFiles(batchId);
+  await cleanupBatchFiles(batchId);
 };
 
 /**
@@ -715,7 +758,7 @@ import { Hono } from 'hono';
 import { getDb } from '@heatsync/backend/db';
 import { processingBatches, batchJobs, createBatchRecord } from '@heatsync/backend/db/schema';
 import { eq } from 'drizzle-orm';
-import { saveTempFile } from '@heatsync/backend/services/tempFiles';
+import { uploadFile } from '@heatsync/backend/services/fileStorage';
 
 export const batchRoutes = new Hono();
 
@@ -776,9 +819,9 @@ batchRoutes.post('/extract', async (c) => {
     }).returning();
 
     // Save to temp storage
-    const tempPath = await saveTempFile(batch.id, job.id, file);
+    const tempPath = await uploadFile(batch.id, job.id, file);
     await db.update(batchJobs)
-      .set({ tempFilePath: tempPath })
+      .set({ storagePath: tempPath })
       .where(eq(batchJobs.id, job.id));
   }
 
@@ -1028,12 +1071,12 @@ batchRoutes.post('/:id/retry', async (c) => {
 ```typescript
 // packages/backend/src/index.ts
 
-import { ensureTempDir } from '@heatsync/backend/services/tempFiles';
+import { # Storage init not needed } from '@heatsync/backend/services/fileStorage';
 import { startWorker, stopWorker } from '@heatsync/backend/services/jobWorker';
 import { batchRoutes } from '@heatsync/backend/routes/batch';
 
 const init = async () => {
-  await ensureTempDir();
+  await # Storage init not needed();
   await runMigrations();
   
   // Start the polling worker
@@ -1057,7 +1100,7 @@ process.on('SIGTERM', () => {
 
 ## Tasks
 
-- [ ] Create `packages/backend/src/services/tempFiles.ts`
+- [ ] Create `packages/backend/src/services/fileStorage.ts`
 - [ ] Create `packages/backend/src/services/concurrency.ts`
 - [ ] Create `packages/backend/src/services/eventBroadcast.ts`
 - [ ] Create `packages/backend/src/services/jobWorker.ts` (new polling worker)
@@ -1077,7 +1120,7 @@ process.on('SIGTERM', () => {
 
 | File | Description |
 |------|-------------|
-| `packages/backend/src/services/tempFiles.ts` | Temp file management |
+| `packages/backend/src/services/fileStorage.ts` | Temp file management |
 | `packages/backend/src/services/concurrency.ts` | DB-based concurrency checks |
 | `packages/backend/src/services/eventBroadcast.ts` | SSE event broadcasting |
 | `packages/backend/src/services/jobWorker.ts` | **Postgres polling worker** |
