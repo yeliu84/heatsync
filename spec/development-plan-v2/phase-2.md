@@ -185,39 +185,7 @@ export const checkStorageHealth = async (): Promise<boolean> => {
 
 ### S3-Compatible Storage Setup
 
-Works with any S3-compatible storage:
-- **MinIO** (self-hosted)
-- **AWS S3**
-- **DigitalOcean Spaces**
-- **Cloudflare R2**
-- **Backblaze B2**
-
-#### MinIO Setup (Docker)
-
-```yaml
-# docker-compose.yml
-services:
-  minio:
-    image: minio/minio
-    command: server /data --console-address ":9001"
-    ports:
-      - "9000:9000"
-      - "9001:9001"
-    environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
-    volumes:
-      - minio_data:/data
-
-volumes:
-  minio_data:
-```
-
-Then create the bucket:
-```bash
-mc alias set local http://localhost:9000 minioadmin minioadmin
-mc mb local/heatsync-uploads
-```
+Works with any S3-compatible storage (self-hosted or cloud).
 
 ### Environment Variables
 
